@@ -25,7 +25,12 @@ be changed during a job without changing the active cleaning method.
 The fork also loads Shark's MARD map file: Home receives every user-facing room
 name while room commands are translated back to the internal `AZ_N` identifiers
 the robot expects. Whole-house and room jobs are supported. Dock before changing
-the method. Resume sends the selected explicit method; whether the firmware
+the method. Matter also reports the base's emptying, mop-cleaning, and refilling
+operations; clean/dirty water conditions and nonzero dock warnings; and the
+current room plus pending/operating/completed/skipped room status. A single-room
+job receives an estimated end time when Shark supplies a usable percentage.
+Whole-house ETA is deliberately omitted because Shark reports mission-wide—not
+per-room—percentage. Resume sends the selected explicit method; whether the firmware
 continues the same job or starts a new job still needs hardware confirmation.
 Pause and dock keep upstream's commands. Selection defaults to Vacuum after
 restarting Homebridge.
@@ -53,7 +58,7 @@ the first release (adjust filenames for subsequent releases):
 
 ```bash
 sudo mkdir -p /var/lib/homebridge/plugin-releases
-sudo cp homebridge-plugins-homebridge-sharkiq-1.6.5-mj261.4.tgz /var/lib/homebridge/plugin-releases/
+sudo cp homebridge-plugins-homebridge-sharkiq-1.6.5-mj261.5.tgz /var/lib/homebridge/plugin-releases/
 sudo tar -czf "$HOME/sharkiq-before-fork-$(date +%Y%m%d-%H%M%S).tgz" \
   -C /var/lib/homebridge/node_modules/@homebridge-plugins homebridge-sharkiq
 sudo cp -a /var/lib/homebridge/package.json /var/lib/homebridge/plugin-releases/package.before-fork.json
@@ -61,7 +66,7 @@ sudo cp -a /var/lib/homebridge/package.json /var/lib/homebridge/plugin-releases/
 sudo hb-service stop
 sudo env PATH="/opt/homebridge/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
   /opt/homebridge/bin/npm --prefix /var/lib/homebridge install --save-exact \
-  /var/lib/homebridge/plugin-releases/homebridge-plugins-homebridge-sharkiq-1.6.5-mj261.4.tgz
+  /var/lib/homebridge/plugin-releases/homebridge-plugins-homebridge-sharkiq-1.6.5-mj261.5.tgz
 sudo hb-service start
 ```
 
@@ -123,8 +128,9 @@ fork synchronization, which can discard the custom commits.
 ## Validation
 
 The tests cover command mapping, selection/start separation, RV3020 live-state
-translation, MARD room parsing, display-name-to-zone translation, polling,
-restored handlers, other-model behavior, and diagnostic filtering. They use
+translation, dock operations and maintenance errors, live area/progress/ETA,
+MARD room parsing, display-name-to-zone translation, polling, restored handlers,
+other-model behavior, and diagnostic filtering. They use
 synthetic fixtures, not account logs or credentials. Hardware and Apple Home
 presentation still require confirmation on the installed release.
 

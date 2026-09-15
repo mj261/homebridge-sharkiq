@@ -1,6 +1,175 @@
 import type { SharkIqVacuum } from './sharkiq.js'
 
-import { encodeRoomListV3 } from './sharkiq.js'
+import { encodeRoomListV3, Properties, readFlag } from './sharkiq.js'
+
+/** Matter RVC operational states used by the RV3020's multifunction dock. */
+export const RV3020_DOCK_OPERATIONAL_STATE = {
+  emptyingDustBin: 67,
+  cleaningMop: 68,
+  fillingWaterTank: 69,
+} as const
+
+/** Additional Matter RVC errors the RV3020 base can report. */
+const RV3020_MAINTENANCE_ERROR_STATE = {
+  unableToCompleteOperation: 2,
+  dustBinFull: 67,
+  waterTankEmpty: 68,
+  waterTankMissing: 69,
+  mopCleaningPadMissing: 71,
+  dirtyWaterTankFull: 74,
+} as const
+
+type JsonRecord = Record<string, any>
+
+function parseRecord(raw: unknown): JsonRecord | undefined {
+  if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+    return raw as JsonRecord
+  }
+  if (typeof raw !== 'string' || raw.trim() === '') {
+    return undefined
+  }
+  try {
+    const parsed = JSON.parse(raw)
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : undefined
+  } catch {
+    return undefined
+  }
+}
+
+function readNumber(raw: unknown): number | undefined {
+  if (typeof raw === 'number' && Number.isFinite(raw)) {
+    return raw
+  }
+  if (typeof raw === 'string' && raw.trim() !== '') {
+    const value = Number(raw)
+    return Number.isFinite(value) ? value : undefined
+  }
+  return undefined
+}
+
+function reportedFlag(vacuum: SharkIqVacuum, ...properties: string[]): boolean {
+  return properties.some(property => readFlag(vacuum.get_property_value(property)) === true)
+}
+
+function nestedFlag(record: JsonRecord | undefined, ...path: string[]): boolean {
+  let value: unknown = record
+  for (const key of path) {
+    if (!value || typeof value !== 'object') {
+      return false
+    }
+    value = (value as JsonRecord)[key]
+  }
+  return readFlag(value) === true
+}
+
+/**
+ * Translate the base's explicit activity flags to standard Matter dock states.
+ *
+ * `PadPriming` is deliberately excluded: hardware captures show it becoming
+ * true while the robot is cleaning away from the base. The flags below belong
+ * to the base operations themselves, so Home does not claim the dock is washing
+ * or filling while the robot is actually in a room.
+ */
+export function rv3020DockOperationalState(
+  vacuum: SharkIqVacuum,
+): typeof RV3020_DOCK_OPERATIONAL_STATE[keyof typeof RV3020_DOCK_OPERATIONAL_STATE] | undefined {
+  if (reportedFlag(vacuum, Properties.PAD_WASH, Properties.PAD_DRY, Properties.PUMP_GREY_WATER)) {
+    return RV3020_DOCK_OPERATIONAL_STATE.cleaningMop
+  }
+  if (reportedFlag(vacuum, Properties.REFILLING, Properties.REFILL_RESUME, Properties.REFILL_RESUME_STATUS)) {
+    return RV3020_DOCK_OPERATIONAL_STATE.fillingWaterTank
+  }
+  if (reportedFlag(vacuum, Properties.EVACUATING, 'evacuate')) {
+    return RV3020_DOCK_OPERATIONAL_STATE.emptyingDustBin
+  }
+  return undefined
+}
+
+export interface RV3020MaintenanceError {
+  errorStateId: number
+  errorStateDetails: string
+}
+
+/**
+ * Read maintenance conditions whose meaning is explicit in the RV3020 shadow.
+ * Unknown dock/warning codes are still surfaced, but only as a generic error;
+ * assigning a specific label to an undocumented numeric code would be worse
+ * than keeping the exact number in the details.
+ */
+export function rv3020MaintenanceError(vacuum: SharkIqVacuum, running: boolean): RV3020MaintenanceError | undefined {
+  const dock = parseRecord(vacuum.get_property_value(Properties.DOCK_SENSOR_DATA))
+  if (nestedFlag(dock, 'GreyTank', 'Full')) {
+    return { errorStateId: RV3020_MAINTENANCE_ERROR_STATE.dirtyWaterTankFull, errorStateDetails: 'Dirty water tank is full' }
+  }
+  if (nestedFlag(dock, 'CleanTank', 'Empty')) {
+    return { errorStateId: RV3020_MAINTENANCE_ERROR_STATE.waterTankEmpty, errorStateDetails: 'Dock clean-water tank is empty' }
+  }
+  if (nestedFlag(dock, 'DustBin', 'Full') || nestedFlag(dock, 'DustBag', 'Full') || nestedFlag(dock, 'Bag', 'Full')) {
+    return { errorStateId: RV3020_MAINTENANCE_ERROR_STATE.dustBinFull, errorStateDetails: 'Dust bin or base bag is full' }
+  }
+
+  // Missing robot-side mopping parts matter only for a pure mop job. The base
+  // intentionally removes them during vacuum-only and the dry stage of a combo
+  // job, so treating either flag as a permanent alert would be a false alarm.
+  const mode = Number(vacuum.operating_mode())
+  const desiredMode = Number(vacuum.get_property_value('_RV3020DesiredOperatingMode'))
+  const pureMopJob = desiredMode === 7 || (desiredMode !== 8 && mode === 7)
+  if (running && pureMopJob && readFlag(vacuum.get_property_value(Properties.WATER_TANK_INSTALLED)) === false) {
+    return { errorStateId: RV3020_MAINTENANCE_ERROR_STATE.waterTankMissing, errorStateDetails: 'Robot water tank is missing' }
+  }
+  if (running && pureMopJob && readFlag(vacuum.get_property_value(Properties.MOP_PLATE_ATTACHED)) === false) {
+    return { errorStateId: RV3020_MAINTENANCE_ERROR_STATE.mopCleaningPadMissing, errorStateDetails: 'Mop plate or cleaning pad is missing' }
+  }
+
+  const dockErrorCode = readNumber(vacuum.get_property_value(Properties.DOCK_ERROR_CODE))
+  if (dockErrorCode !== undefined && dockErrorCode !== 0) {
+    return { errorStateId: RV3020_MAINTENANCE_ERROR_STATE.unableToCompleteOperation, errorStateDetails: `Dock error (code ${dockErrorCode})` }
+  }
+  const warningCode = readNumber(vacuum.get_property_value(Properties.WARNING_CODE))
+  if (warningCode !== undefined && warningCode !== 0) {
+    return { errorStateId: RV3020_MAINTENANCE_ERROR_STATE.unableToCompleteOperation, errorStateDetails: `Vacuum warning (code ${warningCode})` }
+  }
+  return undefined
+}
+
+export interface RV3020LiveProgress {
+  areaId: number | null
+  percent?: number
+}
+
+/** Match Shark's live zone id to the 1-based Matter area id in Home's room list. */
+export function rv3020LiveProgress(vacuum: SharkIqVacuum): RV3020LiveProgress {
+  const live = parseRecord(vacuum.get_property_value(Properties.LIVE_PROGRESS))
+  const floor = typeof live?.floor === 'string' ? live.floor : undefined
+  let zone = typeof live?.zone === 'string' ? live.zone.trim() : ''
+
+  // Some firmware publishes the current zone in LiveLocation rather than in
+  // live_progress. Only accept a named zone/room; raw map coordinates cannot be
+  // mapped honestly without retaining Shark's map geometry.
+  if (!zone) {
+    const locationRaw = vacuum.get_property_value(Properties.LIVE_LOCATION)
+    const location = parseRecord(locationRaw)
+    const candidate = location?.zone ?? location?.Zone ?? location?.room ?? location?.Room
+    if (typeof candidate === 'string') {
+      zone = candidate.trim()
+    } else if (typeof locationRaw === 'string' && !locationRaw.trim().startsWith('{')) {
+      zone = locationRaw.trim()
+    }
+  }
+
+  const roomMap = vacuum.skegox?.getRoomMap(vacuum._dsn)
+  const rooms = vacuum.get_room_list?.() ?? []
+  let areaId: number | null = null
+  if (zone && (!floor || !roomMap?.floorId || floor === roomMap.floorId)) {
+    const displayName = roomMap?.nameMap[zone] ?? zone
+    const index = rooms.findIndex(room => room === displayName || room === zone)
+    areaId = index < 0 ? null : index + 1
+  }
+
+  const rawPercent = readNumber(live?.percent)
+  const percent = rawPercent === undefined ? undefined : Math.max(0, Math.min(100, rawPercent))
+  return { areaId, ...(percent === undefined ? {} : { percent }) }
+}
 
 /** Whole-house commands observed from SharkClean on RV3020XEUS hardware. */
 const RV3020_CLEAN_METHODS = [
@@ -98,7 +267,7 @@ export function selectRV3020Mode(vacuum: SharkIqVacuum, mode: number, powerMode 
 
 export interface RV3020MatterState {
   runMode: 0 | 1
-  operationalState: 0 | 1 | 2 | 64 | 65 | 66
+  operationalState: 0 | 1 | 2 | 64 | 65 | 66 | 67 | 68 | 69
 }
 
 /**
@@ -126,6 +295,10 @@ export function rv3020MatterState(vacuum: SharkIqVacuum, invertDockedStatus = fa
   }
   if (robotStatus === 32 && isRV3020Mode(desiredMode)) {
     return { runMode: 1, operationalState: 1 }
+  }
+  const dockOperation = rv3020DockOperationalState(vacuum)
+  if (dockOperation !== undefined && (robotStatus === 13 || docked || charging)) {
+    return { runMode: 0, operationalState: dockOperation }
   }
   if (robotStatus === 13) {
     return { runMode: 0, operationalState: charging ? 65 : 66 }

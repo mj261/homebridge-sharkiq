@@ -1,7 +1,8 @@
 import { RvcCleanMode } from '@matter/types/clusters/rvc-clean-mode'
+import { RvcOperationalState } from '@matter/types/clusters/rvc-operational-state'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { isRV3020, RV3020_CLEAN_MODES, rv3020CleanMode, rv3020MatterCleanMode, rv3020MatterState, rv3020ModeSelection, selectRV3020Mode, startRV3020 } from './sharkiq-js/rv3020.js'
+import { isRV3020, RV3020_CLEAN_MODES, RV3020_DOCK_OPERATIONAL_STATE, rv3020CleanMode, rv3020LiveProgress, rv3020MaintenanceError, rv3020MatterCleanMode, rv3020MatterState, rv3020ModeSelection, selectRV3020Mode, startRV3020 } from './sharkiq-js/rv3020.js'
 import { selectCleaningDiagnostics, SkegoxApi } from './sharkiq-js/skegox_api.js'
 import { SharkIQMatterPlatform } from './SharkIQMatterPlatform.js'
 
@@ -19,7 +20,11 @@ function robot(model = 'RV3020XEUS') {
     is_paused: () => values.Operating_Mode === 0,
     get_room_list: () => ['Kitchen'],
     get_room_clean_target: (rooms: string[]) => ({ identifier: 'FLOOR1', rooms: rooms.map(room => room === 'Kitchen' ? 'AZ_8' : room) }),
-    skegox: { available: () => true, setProperty: vi.fn().mockResolvedValue(undefined) },
+    skegox: {
+      available: () => true,
+      setProperty: vi.fn().mockResolvedValue(undefined),
+      getRoomMap: () => ({ floorId: 'FLOOR1', rooms: ['Kitchen'], nameMap: { AZ_8: 'Kitchen' } }),
+    },
     set_property_value: vi.fn().mockResolvedValue(undefined),
     clean_rooms: vi.fn().mockResolvedValue(undefined),
     cancel_clean: vi.fn().mockResolvedValue(undefined),
@@ -41,6 +46,8 @@ function platform() {
     config: {},
     matterRefreshers: new Map(),
     matterPollTimers: new Map(),
+    matterSelectedAreas: new Map(),
+    matterAreaJobs: new Map(),
     matterAccessories: new Map(),
   })
   return p
@@ -162,6 +169,77 @@ describe('rV3020 Matter integration', () => {
     expect(rv3020MatterState(vacuum)).toEqual({ runMode: 1, operationalState: 1 })
   })
 
+  it('reports each explicit multifunction-dock operation with its Matter state', () => {
+    expect(RV3020_DOCK_OPERATIONAL_STATE.emptyingDustBin).toBe(RvcOperationalState.OperationalState.EmptyingDustBin)
+    expect(RV3020_DOCK_OPERATIONAL_STATE.cleaningMop).toBe(RvcOperationalState.OperationalState.CleaningMop)
+    expect(RV3020_DOCK_OPERATIONAL_STATE.fillingWaterTank).toBe(RvcOperationalState.OperationalState.FillingWaterTank)
+    const vacuum = robot()
+    vacuum.values.DockedStatus = 1
+    vacuum.values.robot_status = 13
+
+    vacuum.values.Evacuating = true
+    expect(rv3020MatterState(vacuum).operationalState).toBe(RV3020_DOCK_OPERATIONAL_STATE.emptyingDustBin)
+
+    vacuum.values.Evacuating = false
+    vacuum.values.Refilling = true
+    expect(rv3020MatterState(vacuum).operationalState).toBe(RV3020_DOCK_OPERATIONAL_STATE.fillingWaterTank)
+
+    vacuum.values.Refilling = false
+    vacuum.values.pad_wash = 1
+    expect(rv3020MatterState(vacuum).operationalState).toBe(RV3020_DOCK_OPERATIONAL_STATE.cleaningMop)
+  })
+
+  it('does not let a stale dock activity flag replace an active cleaning state', () => {
+    const vacuum = robot()
+    vacuum.values.DockedStatus = 1
+    vacuum.values.robot_status = 6
+    vacuum.values.Operating_Mode = 7
+    vacuum.values.pad_wash = 1
+    expect(rv3020MatterState(vacuum)).toEqual({ runMode: 1, operationalState: 1 })
+  })
+
+  it('surfaces explicit base tank conditions and unknown dock codes', () => {
+    const vacuum = robot()
+    vacuum.values.DockSensorData = JSON.stringify({ GreyTank: { Full: 1 }, CleanTank: { Empty: 0 } })
+    expect(rv3020MaintenanceError(vacuum, false)).toEqual({
+      errorStateId: RvcOperationalState.ErrorState.DirtyWaterTankFull,
+      errorStateDetails: 'Dirty water tank is full',
+    })
+
+    vacuum.values.DockSensorData = JSON.stringify({ GreyTank: { Full: 0 }, CleanTank: { Empty: 1 } })
+    expect(rv3020MaintenanceError(vacuum, false)).toEqual({
+      errorStateId: RvcOperationalState.ErrorState.WaterTankEmpty,
+      errorStateDetails: 'Dock clean-water tank is empty',
+    })
+
+    vacuum.values.DockSensorData = '{}'
+    vacuum.values.DockErrorCode = 23
+    expect(rv3020MaintenanceError(vacuum, false)).toEqual({ errorStateId: 2, errorStateDetails: 'Dock error (code 23)' })
+  })
+
+  it('only reports missing mopping parts during a pure mop job', () => {
+    const vacuum = robot()
+    vacuum.values.Operating_Mode = 7
+    vacuum.values._RV3020DesiredOperatingMode = 7
+    vacuum.values.WaterTankInstalled = false
+    vacuum.values.MopPlateAttached = false
+    expect(rv3020MaintenanceError(vacuum, false)).toBeUndefined()
+    expect(rv3020MaintenanceError(vacuum, true)?.errorStateId).toBe(69)
+
+    vacuum.values._RV3020DesiredOperatingMode = 8
+    expect(rv3020MaintenanceError(vacuum, true)).toBeUndefined()
+  })
+
+  it('maps live Shark zones to Matter area ids and clamps job progress', () => {
+    const vacuum = robot()
+    vacuum.values.live_progress = { floor: 'FLOOR1', zone: 'AZ_8', percent: 114 }
+    expect(rv3020LiveProgress(vacuum)).toEqual({ areaId: 1, percent: 100 })
+
+    vacuum.values.live_progress = JSON.stringify({ floor: 'FLOOR1', zone: '', percent: 25 })
+    vacuum.values.LiveLocation = 'Kitchen'
+    expect(rv3020LiveProgress(vacuum)).toEqual({ areaId: 1, percent: 25 })
+  })
+
   it('keeps the older model suction and whole-house command path', async () => {
     const vacuum = robot('RVOTHER')
     const h = platform()._buildMatterHandlers({}, 'test', vacuum)
@@ -199,6 +277,29 @@ describe('rV3020 Matter integration', () => {
     vi.clearAllTimers()
   })
 
+  it('publishes current room, per-room status, and a single-room ETA', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-09-15T12:00:00Z'))
+    const vacuum = robot()
+    vacuum.values.Operating_Mode = 6
+    vacuum.values.robot_status = 6
+    vacuum.values.live_progress = { floor: 'FLOOR1', zone: 'AZ_8', percent: 50 }
+    const updateAccessoryState = vi.fn().mockResolvedValue(undefined)
+    const p = platform()
+    p.matterSelectedAreas.set('test', [1])
+    p._beginMatterAreaJob('test', [1])
+    vi.advanceTimersByTime(60000)
+    p._startVacuumPolling({ updateAccessoryState }, 'test', vacuum)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(updateAccessoryState).toHaveBeenCalledWith('test', 'serviceArea', {
+      selectedAreas: [1],
+      currentArea: 1,
+      estimatedEndTime: Math.floor(Date.now() / 1000 + 60),
+      progress: [{ areaId: 1, status: 1 }],
+    })
+    vi.clearAllTimers()
+  })
+
   it('rebinds cached accessory handlers and updates the mode definitions', async () => {
     const p = platform()
     const vacuum = robot()
@@ -212,6 +313,9 @@ describe('rV3020 Matter integration', () => {
     expect(registerPlatformAccessories).toHaveBeenCalledWith(expect.any(String), expect.any(String), [cached])
     expect(cached.clusters.rvcCleanMode.supportedModes).toEqual(RV3020_CLEAN_MODES)
     expect(cached.clusters.serviceArea.supportedAreas[0].areaInfo.locationInfo.locationName).toBe('Kitchen')
+    expect(cached.clusters.serviceArea).toMatchObject({ currentArea: null, estimatedEndTime: null, progress: [] })
+    expect(cached.clusters.rvcOperationalState.operationalStateList.map(({ operationalStateId }) => operationalStateId))
+      .toEqual([0, 1, 2, 3, 64, 65, 66, 67, 68, 69])
     await cached.handlers.rvcRunMode.changeToMode({ newMode: 1 })
     expect(vacuum.skegox.setProperty).toHaveBeenCalledWith('TEST', 'Operating_Mode', 6)
   })

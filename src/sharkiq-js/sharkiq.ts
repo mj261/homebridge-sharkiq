@@ -197,6 +197,17 @@ export interface MatterServiceAreaCluster {
    */
   supportedMaps: never[]
   selectedAreas: number[]
+  /** Present when the vacuum supplies a live room/zone signal. */
+  currentArea?: number | null
+  /** Epoch seconds; null when Shark does not provide enough data for an ETA. */
+  estimatedEndTime?: number | null
+  /** Matter per-area status entries (Pending, Operating, Skipped, Completed). */
+  progress?: Array<{
+    areaId: number
+    status: 0 | 1 | 2 | 3
+    totalOperationalTime?: number | null
+    estimatedTime?: number | null
+  }>
 }
 
 /**
@@ -210,12 +221,18 @@ export interface MatterServiceAreaCluster {
  * An empty `supportedMaps` obliges every area to carry `mapId: null`, which
  * matter.js enforces too, so the two must change together.
  */
-export function buildServiceAreaCluster(rooms: string[]): MatterServiceAreaCluster {
-  return {
+export function buildServiceAreaCluster(rooms: string[], progressReporting = false): MatterServiceAreaCluster {
+  const cluster: MatterServiceAreaCluster = {
     supportedAreas: buildSupportedAreas(rooms),
     supportedMaps: [],
     selectedAreas: [],
   }
+  if (progressReporting) {
+    cluster.currentArea = null
+    cluster.estimatedEndTime = null
+    cluster.progress = []
+  }
+  return cluster
 }
 
 /**

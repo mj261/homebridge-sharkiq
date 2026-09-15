@@ -273,6 +273,15 @@ describe('buildServiceAreaCluster', () => {
     expect(buildServiceAreaCluster(HIS_ROOMS).selectedAreas).toEqual([])
   })
 
+  it('enables live room and progress attributes only when requested', () => {
+    expect(buildServiceAreaCluster(HIS_ROOMS)).not.toHaveProperty('progress')
+    expect(buildServiceAreaCluster(HIS_ROOMS, true)).toMatchObject({
+      currentArea: null,
+      estimatedEndTime: null,
+      progress: [],
+    })
+  })
+
   // matter.js: "Areas must not have a null mapId when supportedMaps is defined",
   // and conversely with no maps every mapId must be null and all the same.
   it('leaves every mapId null, as an empty supportedMaps requires', () => {

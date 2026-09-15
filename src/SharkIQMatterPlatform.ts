@@ -6,7 +6,7 @@ import { TIMEOUTS } from './constants.js'
 import { createPromiseRejectionHandler } from './errorHandling.js'
 import { SharkIQPlatform } from './platform.js'
 import { PLATFORM_NAME, PLUGIN_NAME } from './settings.js'
-import { isRV3020, isRV3020Mode, RV3020_CLEAN_MODES, rv3020CleanMode, rv3020MatterCleanMode, rv3020MatterState, rv3020ModeSelection, selectRV3020Mode, startRV3020 } from './sharkiq-js/rv3020.js'
+import { isRV3020, isRV3020Mode, RV3020_CLEAN_MODES, RV3020_DOCK_OPERATIONAL_STATE, rv3020CleanMode, rv3020LiveProgress, rv3020MaintenanceError, rv3020MatterCleanMode, rv3020MatterState, rv3020ModeSelection, selectRV3020Mode, startRV3020 } from './sharkiq-js/rv3020.js'
 import { areaIdsToRoomNames, buildServiceAreaCluster, isKnownCleanMode, MATTER_CLEAN_MODES, matterOperationalError, matterPowerSourceState, OperatingModes, PAUSED_OPERATING_MODE, Properties } from './sharkiq-js/sharkiq.js'
 import { safeTimerMs } from './utils.js'
 
@@ -18,6 +18,27 @@ import { safeTimerMs } from './utils.js'
  * old state. The periodic poll still runs regardless.
  */
 const COMMAND_SETTLE_DELAY = 3000
+
+const BASE_OPERATIONAL_STATES = [0, 1, 2, 3, 64, 65, 66] as const
+
+function matterOperationalStateList(combo: boolean): Array<{ operationalStateId: number }> {
+  return [
+    ...BASE_OPERATIONAL_STATES,
+    ...(combo ? Object.values(RV3020_DOCK_OPERATIONAL_STATE) : []),
+  ].map(operationalStateId => ({ operationalStateId }))
+}
+
+type MatterAreaStatus = 0 | 1 | 2 | 3
+
+interface MatterAreaJob {
+  selectedAreas: number[]
+  statuses: Map<number, MatterAreaStatus>
+  startedAt: number
+  currentArea: number | null
+  lastPercent?: number
+  active: boolean
+  cancelled: boolean
+}
 
 /**
  * SharkIQMatterPlatform
@@ -47,6 +68,8 @@ export class SharkIQMatterPlatform extends SharkIQPlatform {
    */
   private readonly matterPollTimers = new Map<string, ReturnType<typeof setInterval>>()
   private readonly matterRefreshers: Map<string, () => Promise<void>> = new Map()
+  private readonly matterSelectedAreas = new Map<string, number[]>()
+  private readonly matterAreaJobs = new Map<string, MatterAreaJob>()
 
   protected override shutdownPolling(): void {
     super.shutdownPolling()
@@ -191,7 +214,7 @@ export class SharkIQMatterPlatform extends SharkIQPlatform {
             // declared when the vacuum reports a room list - advertising an empty
             // area list would give a controller a picker with nothing in it.
             ...(vacuumDevice.get_room_list?.()?.length
-              ? { serviceArea: buildServiceAreaCluster(vacuumDevice.get_room_list()) }
+              ? { serviceArea: buildServiceAreaCluster(vacuumDevice.get_room_list(), isRV3020(vacuumDevice)) }
               : {}),
             rvcOperationalState: {
               // operationalStateLabel is only permitted on manufacturer-specific
@@ -200,15 +223,7 @@ export class SharkIQMatterPlatform extends SharkIQPlatform {
               // registration (#83), so only the IDs are supplied. The list must
               // still include the Error state (id 3) or the server also rolls back
               // (#79).
-              operationalStateList: [
-                { operationalStateId: 0 },
-                { operationalStateId: 1 },
-                { operationalStateId: 2 },
-                { operationalStateId: 3 },
-                { operationalStateId: 64 },
-                { operationalStateId: 65 },
-                { operationalStateId: 66 },
-              ],
+              operationalStateList: matterOperationalStateList(isRV3020(vacuumDevice)),
               operationalState: 66,
             },
           },
@@ -226,10 +241,14 @@ export class SharkIQMatterPlatform extends SharkIQPlatform {
             supportedModes: RV3020_CLEAN_MODES,
             currentMode: rv3020MatterCleanMode(vacuumDevice),
           }
+          matterAccessory.clusters.rvcOperationalState = {
+            ...matterAccessory.clusters.rvcOperationalState,
+            operationalStateList: matterOperationalStateList(true),
+          }
         }
         const rooms = vacuumDevice.get_room_list?.() ?? []
         if (rooms.length) {
-          matterAccessory.clusters.serviceArea = buildServiceAreaCluster(rooms)
+          matterAccessory.clusters.serviceArea = buildServiceAreaCluster(rooms, isRV3020(vacuumDevice))
         }
         cachedActiveMatterAccessories.push(matterAccessory)
         // Homebridge attaches registration to an existing restored endpoint.
@@ -307,11 +326,15 @@ export class SharkIQMatterPlatform extends SharkIQPlatform {
     // again rather than silently repeating the last room.
     let selectedAreaIds: number[] = []
 
-    const startCleaning = () => {
-      const rooms = areaIdsToRoomNames(selectedAreaIds, vacuumDevice.get_room_list?.() ?? [])
+    const startCleaning = async () => {
+      const jobAreaIds = [...selectedAreaIds]
+      const rooms = areaIdsToRoomNames(jobAreaIds, vacuumDevice.get_room_list?.() ?? [])
       selectedAreaIds = []
       if (isRV3020(vacuumDevice)) {
-        return startRV3020(vacuumDevice, rooms).then(commandSent)
+        await startRV3020(vacuumDevice, rooms)
+        this._beginMatterAreaJob(uuid, jobAreaIds)
+        commandSent()
+        return
       }
       if (rooms.length > 0) {
         this.log.info(`Matter asked for a clean of: ${rooms.join(', ')}`)
@@ -319,12 +342,18 @@ export class SharkIQMatterPlatform extends SharkIQPlatform {
       // An empty list means a whole-house clean. It must stay empty rather than
       // becoming an empty area filter - that is what stopped the vacuum leaving
       // the dock in #68.
-      return vacuumDevice.clean_rooms(rooms)
+      await vacuumDevice.clean_rooms(rooms)
         .then(commandSent)
         .catch(createPromiseRejectionHandler(this.log, 'Matter start cleaning'))
     }
     const returnToDock = () => vacuumDevice.cancel_clean()
-      .then(commandSent)
+      .then(() => {
+        const job = this.matterAreaJobs.get(uuid)
+        if (job) {
+          job.cancelled = true
+        }
+        commandSent()
+      })
       .catch(createPromiseRejectionHandler(this.log, 'Matter return to dock'))
 
     return {
@@ -380,9 +409,13 @@ export class SharkIQMatterPlatform extends SharkIQPlatform {
             // the whole house when the user asked for one room.
             this.log.warn(`Matter selected area(s) ${(newAreas ?? []).join(', ')} which are not on this vacuum's map - ignoring the selection.`)
             selectedAreaIds = []
+            this.matterSelectedAreas.set(uuid, [])
+            this.matterAreaJobs.delete(uuid)
             return
           }
           selectedAreaIds = newAreas ?? []
+          this.matterSelectedAreas.set(uuid, [...selectedAreaIds])
+          this.matterAreaJobs.delete(uuid)
           this.log.debug(`Matter selected area(s): ${names.join(', ') || 'none'}`)
         },
         skipArea: async () => {
@@ -433,6 +466,110 @@ export class SharkIQMatterPlatform extends SharkIQPlatform {
     }
   }
 
+  /** Start (or stage) Matter's per-room progress record for one job. */
+  private _beginMatterAreaJob(uuid: string, selectedAreas: number[]): void {
+    const uniqueAreas = [...new Set(selectedAreas)]
+    this.matterSelectedAreas.set(uuid, uniqueAreas)
+    this.matterAreaJobs.set(uuid, {
+      selectedAreas: uniqueAreas,
+      statuses: new Map(uniqueAreas.map(areaId => [areaId, 0 as MatterAreaStatus])),
+      startedAt: Date.now(),
+      currentArea: null,
+      active: true,
+      cancelled: false,
+    })
+  }
+
+  /**
+   * Build live ServiceArea attributes from Shark's zone and job percentage.
+   *
+   * Matter progress is intentionally state-based rather than a made-up percent:
+   * Shark gives one percentage for the entire mission, while Matter describes
+   * each room as pending, operating, skipped, or complete. A room is completed
+   * when the live zone moves to the next one. On an early return, unfinished
+   * rooms become skipped. The job-wide percentage is used for an ETA only when
+   * exactly one room was selected, where the two meanings coincide.
+   */
+  private _matterServiceAreaState(
+    uuid: string,
+    vacuumDevice: SharkIqVacuum,
+    runMode: number,
+    operationalState: number,
+  ): Record<string, unknown> | undefined {
+    const rooms = vacuumDevice.get_room_list?.() ?? []
+    if (!isRV3020(vacuumDevice) || rooms.length === 0) {
+      return undefined
+    }
+
+    let job = this.matterAreaJobs.get(uuid)
+    const selectedAreas = this.matterSelectedAreas.get(uuid) ?? []
+    const live = rv3020LiveProgress(vacuumDevice)
+    const operating = runMode === 1 && (operationalState === 1 || operationalState === 2)
+
+    if (operating && (!job || !job.active)) {
+      this._beginMatterAreaJob(uuid, selectedAreas)
+      job = this.matterAreaJobs.get(uuid)!
+    }
+
+    if (!job) {
+      return {
+        selectedAreas,
+        currentArea: null,
+        estimatedEndTime: null,
+        progress: selectedAreas.map(areaId => ({ areaId, status: 0 })),
+      }
+    }
+
+    if (operating) {
+      job.lastPercent = live.percent ?? job.lastPercent
+      // A single-room clean has an unambiguous current room even before the
+      // live-location telemetry catches up with the start command.
+      const currentArea = live.areaId ?? (job.selectedAreas.length === 1 ? job.selectedAreas[0] : null)
+      if (currentArea !== null && currentArea !== job.currentArea) {
+        if (job.currentArea !== null && job.statuses.get(job.currentArea) === 1) {
+          job.statuses.set(job.currentArea, 3)
+        }
+        job.currentArea = currentArea
+        job.statuses.set(currentArea, 1)
+      } else if (currentArea !== null) {
+        job.statuses.set(currentArea, 1)
+      }
+    } else if (job.active) {
+      const completed = !job.cancelled && (job.lastPercent ?? 0) >= 99
+      job.statuses.forEach((status, areaId) => {
+        if (status === 0 || status === 1) {
+          job!.statuses.set(areaId, completed ? 3 : 2)
+        }
+      })
+      job.currentArea = null
+      job.active = false
+    }
+
+    let estimatedEndTime: number | null = null
+    if (operating && operationalState === 1 && job.currentArea !== null && job.selectedAreas.length === 1) {
+      const percent = job.lastPercent
+      const elapsedSeconds = Math.max(1, (Date.now() - job.startedAt) / 1000)
+      if (percent !== undefined && percent > 0 && percent < 100) {
+        const remainingSeconds = elapsedSeconds * (100 - percent) / percent
+        // Reject implausible early estimates instead of filling Home with a
+        // multi-day ETA from the first noisy percentage sample.
+        if (remainingSeconds <= 24 * 60 * 60) {
+          estimatedEndTime = Math.floor(Date.now() / 1000 + remainingSeconds)
+        }
+      }
+    }
+
+    const order = job.selectedAreas.length > 0
+      ? job.selectedAreas
+      : [...job.statuses.keys()].sort((a, b) => a - b)
+    return {
+      selectedAreas: job.selectedAreas,
+      currentArea: job.currentArea,
+      estimatedEndTime,
+      progress: order.map(areaId => ({ areaId, status: job!.statuses.get(areaId) ?? 0 })),
+    }
+  }
+
   /**
    * Start a periodic polling loop that fetches live vacuum state from the Shark
    * cloud and pushes updates into Matter cluster attributes via
@@ -463,6 +600,18 @@ export class SharkIQMatterPlatform extends SharkIQPlatform {
           Properties.WATER_TANK_INSTALLED,
           Properties.WATER_TANK_EMPTY,
           Properties.MOP_PLATE_ATTACHED,
+          Properties.EVACUATING,
+          Properties.PAD_WASH,
+          Properties.PAD_DRY,
+          Properties.PUMP_GREY_WATER,
+          Properties.REFILLING,
+          Properties.REFILL_RESUME,
+          Properties.REFILL_RESUME_STATUS,
+          Properties.DOCK_SENSOR_DATA,
+          Properties.DOCK_ERROR_CODE,
+          Properties.WARNING_CODE,
+          Properties.LIVE_PROGRESS,
+          Properties.LIVE_LOCATION,
         ])
 
         const mode = vacuumDevice.operating_mode()
@@ -493,7 +642,13 @@ export class SharkIQMatterPlatform extends SharkIQPlatform {
         // Faults and an empty water tank, as Matter's own error states (#88).
         const fault = vacuumDevice.fault()
         const waterTank = vacuumDevice.water_tank()
-        const operationalError = matterOperationalError(fault, waterTank, runMode === 1 && operationalState === 1)
+        const standardError = matterOperationalError(fault, waterTank, runMode === 1 && operationalState === 1)
+        const maintenanceError = combo
+          ? rv3020MaintenanceError(vacuumDevice, runMode === 1 && operationalState === 1)
+          : undefined
+        const operationalError = standardError.errorStateId === 0 && maintenanceError
+          ? maintenanceError
+          : standardError
 
         if (typeof matterApi.updateAccessoryState === 'function') {
           await matterApi.updateAccessoryState(uuid, 'rvcRunMode', { currentMode: runMode })
@@ -517,14 +672,22 @@ export class SharkIQMatterPlatform extends SharkIQPlatform {
             : { currentMode: cleanMode })
         }
 
+        const serviceAreaState = this._matterServiceAreaState(uuid, vacuumDevice, runMode, operationalState)
+        if (serviceAreaState) {
+          await matterApi.updateAccessoryState(uuid, 'serviceArea', serviceAreaState)
+        }
+
         if (fault) {
           this.log.warn(`${vacuumDevice._name}: ${fault.message}${fault.extendedCode ? ` (extended code ${fault.extendedCode})` : ''}`)
         }
 
+        const comboDetails = combo
+          ? `, operatingMode=${mode}, robotStatus=${vacuumDevice.get_property_value(Properties.ROBOT_STATUS) ?? 'unknown'}, `
+          + `currentArea=${serviceAreaState?.currentArea ?? 'unknown'}, progress=${JSON.stringify(serviceAreaState?.progress ?? [])}`
+          : ''
         this.log.debug(`[Matter] Vacuum ${vacuumDevice._dsn}: runMode=${runMode}, operationalState=${operationalState}, `
           + `battery=${battery.percent ?? 'unknown'}%${battery.charging ? ' (charging)' : ''}, cleanMode=${cleanMode}, `
-          + `errorState=${operationalError.errorStateId}${
-            combo ? `, operatingMode=${mode}, robotStatus=${vacuumDevice.get_property_value(Properties.ROBOT_STATUS) ?? 'unknown'}` : ''}`)
+          + `errorState=${operationalError.errorStateId}${comboDetails}`)
         this.log.debug(
           '[Matter] Error code:',
           fault?.code ?? 0,
