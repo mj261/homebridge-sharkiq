@@ -95,7 +95,12 @@ describe('skegoxApi', () => {
     stubFetch({ mard: {
       floor_id: 'FLOOR1',
       areas: [
-        { area_meta_data: 'UserRoom:1', robot_room_name: 'AZ_8', user_room_name: 'Kitchen' },
+        {
+          area_meta_data: 'UserRoom:1',
+          robot_room_name: 'AZ_8',
+          user_room_name: 'Kitchen',
+          points: [{ x: 0, y: 0 }, { x: 4, y: 0 }, { x: 4, y: 3 }, { x: 0, y: 3 }],
+        },
         { area_meta_data: 'UserRoom:2', robot_room_name: 'AZ_10', user_room_name: 'Living Room' },
         { area_meta_data: 'CarpetZone:3', robot_room_name: 'CZ_3', user_room_name: 'Rug' },
       ],
@@ -107,6 +112,7 @@ describe('skegoxApi', () => {
       floorId: 'FLOOR1',
       rooms: ['Kitchen', 'Living Room'],
       nameMap: { AZ_8: 'Kitchen', AZ_10: 'Living Room' },
+      polygons: { AZ_8: [{ x: 0, y: 0 }, { x: 4, y: 0 }, { x: 4, y: 3 }, { x: 0, y: 3 }] },
     })
   })
 
