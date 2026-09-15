@@ -76,9 +76,57 @@ export interface SkegoxRoomMap {
   rooms: string[]
   /** Robot zone id (for example AZ_8) to human-readable label. */
   nameMap: Record<string, string>
+  /** Robot-map polygon for each zone, in the same coordinates as LiveLocation. */
+  polygons: Record<string, Array<{ x: number, y: number }>>
 }
 
-/** Parse a Mobile_App_Room_Definition (MARD) file without retaining map geometry. */
+function mardPoint(raw: unknown): { x: number, y: number } | undefined {
+  if (Array.isArray(raw) && raw.length >= 2) {
+    const x = Number(raw[0])
+    const y = Number(raw[1])
+    return Number.isFinite(x) && Number.isFinite(y) ? { x, y } : undefined
+  }
+  if (!raw || typeof raw !== 'object') {
+    return undefined
+  }
+  const point = raw as Record<string, unknown>
+  const x = Number(point.x ?? point.x_coord ?? point.x1)
+  const y = Number(point.y ?? point.y_coord ?? point.y1)
+  return Number.isFinite(x) && Number.isFinite(y) ? { x, y } : undefined
+}
+
+function mardPolygon(raw: unknown): Array<{ x: number, y: number }> {
+  let points = raw
+  if (typeof points === 'string') {
+    try {
+      points = JSON.parse(points)
+    } catch {
+      return []
+    }
+  }
+  if (!Array.isArray(points)) {
+    return []
+  }
+
+  // Observed MARD files use point objects. Accept coordinate pairs and a flat
+  // number array as well so a firmware representation change does not disable
+  // current-room reporting.
+  if (points.every(value => typeof value === 'number' || typeof value === 'string')) {
+    const polygon: Array<{ x: number, y: number }> = []
+    for (let index = 0; index + 1 < points.length; index += 2) {
+      const point = mardPoint([points[index], points[index + 1]])
+      if (point) {
+        polygon.push(point)
+      }
+    }
+    return polygon.length >= 3 ? polygon : []
+  }
+
+  const polygon = points.map(mardPoint).filter((point): point is { x: number, y: number } => point !== undefined)
+  return polygon.length >= 3 ? polygon : []
+}
+
+/** Parse room names and geometry from a Mobile_App_Room_Definition (MARD) file. */
 export function parseMard(raw: unknown): SkegoxRoomMap | undefined {
   let parsed: any
   try {
@@ -91,6 +139,7 @@ export function parseMard(raw: unknown): SkegoxRoomMap | undefined {
   }
 
   const nameMap: Record<string, string> = {}
+  const polygons: SkegoxRoomMap['polygons'] = {}
   const rooms: string[] = []
   for (const area of parsed.areas) {
     if (!area || typeof area !== 'object' || !String(area.area_meta_data ?? '').startsWith('UserRoom:')) {
@@ -102,11 +151,15 @@ export function parseMard(raw: unknown): SkegoxRoomMap | undefined {
     }
     const displayName = String(area.user_room_name ?? '').trim() || robotName
     nameMap[robotName] = displayName
+    const polygon = mardPolygon(area.points)
+    if (polygon.length) {
+      polygons[robotName] = polygon
+    }
     rooms.push(displayName)
   }
 
   const floorId = typeof parsed.floor_id === 'string' ? parsed.floor_id : ''
-  return rooms.length ? { floorId, rooms, nameMap } : undefined
+  return rooms.length ? { floorId, rooms, nameMap, polygons } : undefined
 }
 
 // Client for the newer SharkNinja device API used by the current SharkClean
@@ -240,7 +293,8 @@ export class SkegoxApi {
         return
       }
       this.room_maps.set(dsn, roomMap)
-      this.log.debug(`MARD room map for "${label}" (${dsn}): floor "${roomMap.floorId}" with ${roomMap.rooms.length} room(s): ${roomMap.rooms.join(', ')}`)
+      this.log.debug(`MARD room map for "${label}" (${dsn}): floor "${roomMap.floorId}" with ${roomMap.rooms.length} room(s), `
+        + `${Object.keys(roomMap.polygons).length} polygon(s): ${roomMap.rooms.join(', ')}`)
     } catch (error) {
       // Map metadata is optional. A transient object-store failure must not
       // prevent the vacuum itself from being discovered.
@@ -327,7 +381,13 @@ export class SkegoxApi {
   getRoomMap(dsn: string): SkegoxRoomMap | undefined {
     const roomMap = this.room_maps.get(String(dsn).trim().toUpperCase())
     return roomMap
-      ? { floorId: roomMap.floorId, rooms: [...roomMap.rooms], nameMap: { ...roomMap.nameMap } }
+      ? {
+          floorId: roomMap.floorId,
+          rooms: [...roomMap.rooms],
+          nameMap: { ...roomMap.nameMap },
+          polygons: Object.fromEntries(Object.entries(roomMap.polygons)
+            .map(([zone, points]) => [zone, points.map(point => ({ ...point }))])),
+        }
       : undefined
   }
 
