@@ -23,7 +23,12 @@ function robot(model = 'RV3020XEUS') {
     skegox: {
       available: () => true,
       setProperty: vi.fn().mockResolvedValue(undefined),
-      getRoomMap: () => ({ floorId: 'FLOOR1', rooms: ['Kitchen'], nameMap: { AZ_8: 'Kitchen' } }),
+      getRoomMap: () => ({
+        floorId: 'FLOOR1',
+        rooms: ['Kitchen'],
+        nameMap: { AZ_8: 'Kitchen' },
+        polygons: { AZ_8: [{ x: -1, y: 1 }, { x: 3, y: 1 }, { x: 3, y: 3 }, { x: -1, y: 3 }] },
+      }),
     },
     set_property_value: vi.fn().mockResolvedValue(undefined),
     clean_rooms: vi.fn().mockResolvedValue(undefined),
@@ -246,6 +251,16 @@ describe('rV3020 Matter integration', () => {
     expect(rv3020LiveProgress(vacuum)).toEqual({ areaId: 1, percent: 25 })
   })
 
+  it('uses MARD room polygons when whole-house telemetry omits the zone', () => {
+    const vacuum = robot()
+    vacuum.values.live_progress = { floor: 'FLOOR1', zone: '', percent: 0 }
+    vacuum.values.LiveLocation = JSON.stringify({ x_coord: 2.03, y_coord: 1.7, theta: 1.79 })
+    expect(rv3020LiveProgress(vacuum)).toEqual({ areaId: 1, percent: 0 })
+
+    vacuum.values.LiveLocation = JSON.stringify({ x_coord: 8, y_coord: 8 })
+    expect(rv3020LiveProgress(vacuum)).toEqual({ areaId: null, percent: 0 })
+  })
+
   it('keeps the older model suction and whole-house command path', async () => {
     const vacuum = robot('RVOTHER')
     const h = platform()._buildMatterHandlers({}, 'test', vacuum)
@@ -301,6 +316,26 @@ describe('rV3020 Matter integration', () => {
       selectedAreas: [1],
       currentArea: 1,
       estimatedEndTime: Math.floor(Date.now() / 1000 + 60),
+      progress: [{ areaId: 1, status: 1 }],
+    })
+    vi.clearAllTimers()
+  })
+
+  it('moves a coordinate-only whole-house run from preparing to its current room', async () => {
+    vi.useFakeTimers()
+    const vacuum = robot()
+    vacuum.values.Operating_Mode = 6
+    vacuum.values.robot_status = 6
+    vacuum.values.live_progress = { floor: 'FLOOR1', zone: '', percent: 0 }
+    vacuum.values.LiveLocation = JSON.stringify({ x_coord: 2.03, y_coord: 1.7 })
+    const updateAccessoryState = vi.fn().mockResolvedValue(undefined)
+    const p = platform()
+    p._startVacuumPolling({ updateAccessoryState }, 'test', vacuum)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(updateAccessoryState).toHaveBeenCalledWith('test', 'serviceArea', {
+      selectedAreas: [],
+      currentArea: 1,
+      estimatedEndTime: null,
       progress: [{ areaId: 1, status: 1 }],
     })
     vi.clearAllTimers()
