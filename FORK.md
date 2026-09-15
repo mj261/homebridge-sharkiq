@@ -29,6 +29,9 @@ the method. Matter also reports the base's emptying, mop-cleaning, and refilling
 operations; explicit clean/dirty water conditions and dock errors; and the
 current room plus pending/operating/completed/skipped room status. A single-room
 job receives an estimated end time when Shark supplies a usable percentage.
+For whole-house runs, the RV3020 leaves its live zone blank; the fork resolves
+its `LiveLocation` coordinates against MARD room polygons so Home advances from
+Preparing to the actual room without guessing.
 Whole-house ETA is deliberately omitted because Shark reports mission-wide—not
 per-room—percentage. Resume sends the selected explicit method; whether the firmware
 continues the same job or starts a new job still needs hardware confirmation.
@@ -60,7 +63,7 @@ the first release (adjust filenames for subsequent releases):
 
 ```bash
 sudo mkdir -p /var/lib/homebridge/plugin-releases
-sudo cp homebridge-plugins-homebridge-sharkiq-1.6.5-mj261.6.tgz /var/lib/homebridge/plugin-releases/
+sudo cp homebridge-plugins-homebridge-sharkiq-1.6.5-mj261.7.tgz /var/lib/homebridge/plugin-releases/
 sudo tar -czf "$HOME/sharkiq-before-fork-$(date +%Y%m%d-%H%M%S).tgz" \
   -C /var/lib/homebridge/node_modules/@homebridge-plugins homebridge-sharkiq
 sudo cp -a /var/lib/homebridge/package.json /var/lib/homebridge/plugin-releases/package.before-fork.json
@@ -68,7 +71,7 @@ sudo cp -a /var/lib/homebridge/package.json /var/lib/homebridge/plugin-releases/
 sudo hb-service stop
 sudo env PATH="/opt/homebridge/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
   /opt/homebridge/bin/npm --prefix /var/lib/homebridge install --save-exact \
-  /var/lib/homebridge/plugin-releases/homebridge-plugins-homebridge-sharkiq-1.6.5-mj261.6.tgz
+  /var/lib/homebridge/plugin-releases/homebridge-plugins-homebridge-sharkiq-1.6.5-mj261.7.tgz
 sudo hb-service start
 ```
 
