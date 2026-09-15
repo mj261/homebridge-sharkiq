@@ -46,14 +46,14 @@ the first release (adjust filenames for subsequent releases):
 
 ```bash
 sudo mkdir -p /var/lib/homebridge/plugin-releases
-sudo cp homebridge-plugins-homebridge-sharkiq-1.6.5-mj261.1.tgz /var/lib/homebridge/plugin-releases/
+sudo cp homebridge-plugins-homebridge-sharkiq-1.6.5-mj261.2.tgz /var/lib/homebridge/plugin-releases/
 sudo tar -czf "$HOME/sharkiq-before-fork-$(date +%Y%m%d-%H%M%S).tgz" \
   -C /var/lib/homebridge/node_modules/@homebridge-plugins homebridge-sharkiq
 sudo cp -a /var/lib/homebridge/package.json /var/lib/homebridge/plugin-releases/package.before-fork.json
 # Also save package-lock.json here if it exists.
 sudo hb-service stop
 sudo npm --prefix /var/lib/homebridge install --save-exact \
-  /var/lib/homebridge/plugin-releases/homebridge-plugins-homebridge-sharkiq-1.6.5-mj261.1.tgz
+  /var/lib/homebridge/plugin-releases/homebridge-plugins-homebridge-sharkiq-1.6.5-mj261.2.tgz
 sudo hb-service start
 ```
 

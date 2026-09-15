@@ -58,7 +58,7 @@ describe('vacuums that only exist on the newer SharkNinja API', () => {
     expect(adopted[0].name).toBe('Shark')
     expect(adopted[0].newApiOnly).toBe(true)
     expect(adopted[0].get_property_value('Operating_Mode')).toBe(2)
-    expect(log.info).toHaveBeenCalledWith(expect.stringContaining('taken from the newer one instead'))
+    expect(log.info).toHaveBeenCalledWith(expect.stringContaining('found only on the newer SharkNinja API'))
   })
 
   it('takes the model number from the registry when the properties do not carry one', async () => {
@@ -71,6 +71,29 @@ describe('vacuums that only exist on the newer SharkNinja API', () => {
     const adopted = await platform.adoptNewApiVacuums(aylaThatMustNotBeUsed, skegox, false)
 
     expect(adopted[0]._vac_model_number).toBe('RV761RO1US')
+  })
+
+  it('merges a newer-API-only vacuum without duplicating one already returned by Ayla', async () => {
+    const { platform } = makePlatform()
+    const skegox = makeSkegox(
+      [
+        { dsn: 'AC000W036859009', name: 'Ashy', model: 'AV2510AXUS' },
+        { dsn: 'AC000W046832536', name: 'Olivia', model: 'RV3020XEUS' },
+      ],
+      { Operating_Mode: 3 },
+    )
+
+    const adopted = await platform.adoptNewApiVacuums(
+      aylaThatMustNotBeUsed,
+      skegox,
+      false,
+      new Set(['ac000w036859009']),
+    )
+
+    expect(adopted).toHaveLength(1)
+    expect(adopted[0]._dsn).toBe('AC000W046832536')
+    expect(adopted[0]._vac_model_number).toBe('RV3020XEUS')
+    expect(adopted[0].newApiOnly).toBe(true)
   })
 
   it('ignores an appliance on the account that is not a vacuum', async () => {

@@ -112,13 +112,16 @@ export class SharkIQPlatform implements DynamicPlatformPlugin {
       await login.checkLogin()
       const ayla_api = get_ayla_api(auth_file, this.log, europe)
       await ayla_api.sign_in()
-      let devices = await ayla_api.get_devices()
+      const devices = await ayla_api.get_devices()
       const skegox = await this.enableSkegox(devices, storagePath, europe)
-      // Newer vacuums are dropping off the Ayla account altogether: the
-      // SharkClean app still shows them because it uses the newer API, while
-      // the list this plugin builds accessories from comes back empty (#91).
-      if (devices.length === 0 && skegox) {
-        devices = await this.adoptNewApiVacuums(ayla_api, skegox, europe)
+      // Newer vacuums can drop off the Ayla account individually. An account
+      // may therefore contain an older vacuum from Ayla and a newer-API-only
+      // vacuum at the same time. Merge every missing newer-API vacuum rather
+      // than adopting them only when Ayla returned an entirely empty list.
+      if (skegox) {
+        const knownDsns = new Set(devices.map(device => device._dsn.trim().toUpperCase()))
+        const newApiOnlyDevices = await this.adoptNewApiVacuums(ayla_api, skegox, europe, knownDsns)
+        devices.push(...newApiOnlyDevices)
       }
       // Room cleans default to the app's plain "Clean". Matrix Clean is the
       // app's second button for a room - two passes, different mode key (#41).
@@ -161,9 +164,18 @@ export class SharkIQPlatform implements DynamicPlatformPlugin {
   // Build vacuums from the newer SharkNinja API for an account the older Ayla
   // API lists nothing on. Everything these vacuums read and write goes to the
   // newer API, which is where their state lives (#91).
-  adoptNewApiVacuums = async (ayla_api: AylaApi, skegox: SkegoxApi, europe: boolean): Promise<SharkIqVacuum[]> => {
+  adoptNewApiVacuums = async (
+    ayla_api: AylaApi,
+    skegox: SkegoxApi,
+    europe: boolean,
+    knownDsns: Iterable<string> = [],
+  ): Promise<SharkIqVacuum[]> => {
     const adopted: SharkIqVacuum[] = []
+    const known = new Set([...knownDsns].map(dsn => String(dsn).trim().toUpperCase()))
     for (const entry of skegox.listDevices()) {
+      if (known.has(entry.dsn.trim().toUpperCase())) {
+        continue
+      }
       const vacuum = new SharkIqVacuum(ayla_api, {
         dsn: entry.dsn,
         // Ayla's device key and OEM model are unknown here, and nothing this
@@ -188,7 +200,7 @@ export class SharkIQPlatform implements DynamicPlatformPlugin {
       adopted.push(vacuum)
     }
     if (adopted.length > 0) {
-      this.log.info(`Your account lists no vacuums on the older SharkNinja API, so ${adopted.length} vacuum(s) were taken from the newer one instead.`)
+      this.log.info(`Added ${adopted.length} vacuum(s) found only on the newer SharkNinja API.`)
     }
     return adopted
   }
