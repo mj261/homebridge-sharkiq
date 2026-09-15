@@ -6,6 +6,7 @@ import { TIMEOUTS } from './constants.js'
 import { createPromiseRejectionHandler } from './errorHandling.js'
 import { SharkIQPlatform } from './platform.js'
 import { PLATFORM_NAME, PLUGIN_NAME } from './settings.js'
+import { isRV3020, isRV3020Mode, RV3020_CLEAN_MODES, rv3020CleanMode, selectRV3020Mode, startRV3020 } from './sharkiq-js/rv3020.js'
 import { areaIdsToRoomNames, buildServiceAreaCluster, isKnownCleanMode, MATTER_CLEAN_MODES, matterOperationalError, matterPowerSourceState, OperatingModes, PAUSED_OPERATING_MODE, Properties } from './sharkiq-js/sharkiq.js'
 import { safeTimerMs } from './utils.js'
 
@@ -183,8 +184,8 @@ export class SharkIQMatterPlatform extends SharkIQPlatform {
             // Suction level. Previously only reachable on HAP, where it is a fan
             // speed slider - Matter users had no way to change it at all (#88).
             rvcCleanMode: {
-              supportedModes: [...MATTER_CLEAN_MODES],
-              currentMode: vacuumDevice.power_mode() ?? 0,
+              supportedModes: isRV3020(vacuumDevice) ? RV3020_CLEAN_MODES : [...MATTER_CLEAN_MODES],
+              currentMode: isRV3020(vacuumDevice) ? rv3020CleanMode(vacuumDevice) : vacuumDevice.power_mode() ?? 0,
             },
             // ServiceArea: room selection, from the vacuum's own map (#41). Only
             // declared when the vacuum reports a room list - advertising an empty
@@ -217,7 +218,18 @@ export class SharkIQMatterPlatform extends SharkIQPlatform {
         this.matterAccessories.set(uuid, matterAccessory)
         this.log.info(`Preparing new Matter accessory for vacuum: ${vacuumDevice._name.toString()} (${vacuumDevice._dsn})`)
       } else {
+        // Restored endpoints need live handlers, which are not serialized.
+        matterAccessory.handlers = this._buildMatterHandlers(matterApi, uuid, vacuumDevice)
+        if (isRV3020(vacuumDevice)) {
+          matterAccessory.model = 'RV3020XEUS'
+          matterAccessory.clusters.rvcCleanMode = {
+            supportedModes: RV3020_CLEAN_MODES,
+            currentMode: rv3020CleanMode(vacuumDevice),
+          }
+        }
         cachedActiveMatterAccessories.push(matterAccessory)
+        // Homebridge attaches registration to an existing restored endpoint.
+        accessoriesToRegister.push(matterAccessory)
         this.log.info(`Restoring cached Matter accessory for vacuum: ${vacuumDevice._name.toString()} (${vacuumDevice._dsn})`)
       }
 
@@ -294,6 +306,9 @@ export class SharkIQMatterPlatform extends SharkIQPlatform {
     const startCleaning = () => {
       const rooms = areaIdsToRoomNames(selectedAreaIds, vacuumDevice.get_room_list?.() ?? [])
       selectedAreaIds = []
+      if (isRV3020(vacuumDevice)) {
+        return startRV3020(vacuumDevice, rooms).then(commandSent)
+      }
       if (rooms.length > 0) {
         this.log.info(`Matter asked for a clean of: ${rooms.join(', ')}`)
       }
@@ -320,6 +335,18 @@ export class SharkIQMatterPlatform extends SharkIQPlatform {
       },
       rvcCleanMode: {
         changeToMode: async ({ newMode }: { newMode: number }) => {
+          if (isRV3020(vacuumDevice)) {
+            if (!isRV3020Mode(newMode)) {
+              throw new Error(`Unsupported RV3020 clean mode ${newMode}`)
+            }
+            if (isRV3020Mode(vacuumDevice.operating_mode()) || vacuumDevice.is_paused()) {
+              throw new Error('Dock the RV3020 before changing its cleaning method.')
+            }
+            selectRV3020Mode(vacuumDevice, newMode)
+            this.log.info(`RV3020: selected ${RV3020_CLEAN_MODES.find(entry => entry.mode === newMode)!.label}.`)
+            // Selecting a method prepares the next start; it does not start a job.
+            return
+          }
           if (!isKnownCleanMode(newMode)) {
             this.log.warn(`Matter asked for clean mode ${newMode}, which this vacuum does not have - ignoring.`)
             return
@@ -353,6 +380,10 @@ export class SharkIQMatterPlatform extends SharkIQPlatform {
       },
       rvcOperationalState: {
         resume: async () => {
+          if (isRV3020(vacuumDevice)) {
+            await startCleaning()
+            return
+          }
           // Resume in place if a clean is paused, otherwise start a fresh clean.
           // ⚠️ Paused is PAUSED_OPERATING_MODE (STOP), not OperatingModes.PAUSE -
           // testing for PAUSE here never matched, so a paused vacuum was sent a
@@ -421,7 +452,8 @@ export class SharkIQMatterPlatform extends SharkIQPlatform {
 
         const mode = vacuumDevice.operating_mode()
         const dockedStatus = vacuumDevice.docked_status()
-        const isActive = mode === OperatingModes.START || mode === OperatingModes.STOP
+        const combo = isRV3020(vacuumDevice)
+        const isActive = mode === OperatingModes.START || mode === OperatingModes.STOP || (combo && isRV3020Mode(mode))
         const isPaused = vacuumDevice.is_paused()
         const isDocked = invertDockedStatus ? dockedStatus !== 1 : dockedStatus === 1
 
@@ -441,7 +473,7 @@ export class SharkIQMatterPlatform extends SharkIQPlatform {
         // Faults and an empty water tank, as Matter's own error states (#88).
         const fault = vacuumDevice.fault()
         const waterTank = vacuumDevice.water_tank()
-        const operationalError = matterOperationalError(fault, waterTank, mode === OperatingModes.START)
+        const operationalError = matterOperationalError(fault, waterTank, isActive && !isPaused)
 
         if (typeof matterApi.updateAccessoryState === 'function') {
           await matterApi.updateAccessoryState(uuid, 'rvcRunMode', { currentMode: runMode })
@@ -458,9 +490,11 @@ export class SharkIQMatterPlatform extends SharkIQPlatform {
         // rather than only what we last told it (#88).
         const battery = vacuumDevice.battery()
         await matterApi.updateAccessoryState(uuid, 'powerSource', matterPowerSourceState(battery))
-        const cleanMode = vacuumDevice.power_mode()
-        if (isKnownCleanMode(cleanMode)) {
-          await matterApi.updateAccessoryState(uuid, 'rvcCleanMode', { currentMode: cleanMode })
+        const cleanMode = combo ? rv3020CleanMode(vacuumDevice, true) : vacuumDevice.power_mode()
+        if (combo || isKnownCleanMode(cleanMode)) {
+          await matterApi.updateAccessoryState(uuid, 'rvcCleanMode', combo
+            ? { supportedModes: RV3020_CLEAN_MODES, currentMode: cleanMode }
+            : { currentMode: cleanMode })
         }
 
         if (fault) {

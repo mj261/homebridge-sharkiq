@@ -1,0 +1,68 @@
+name: Fork build and release
+
+on:
+  push:
+    branches: [latest]
+  pull_request:
+    branches: [latest]
+  workflow_dispatch:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    if: github.repository == 'mj261/homebridge-sharkiq'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [22, 24, 26]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run build
+      - run: npm test
+      - name: Verify release tag matches package version
+        if: github.event_name == 'release'
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: node -e 'const p = require("./package.json"); if (process.env.RELEASE_TAG !== `v${p.version}` || !p.version.includes("-mj261.")) process.exit(1)'
+      - name: Package compiled plugin
+        if: matrix.node == 24
+        run: |
+          mkdir -p packages
+          npm pack --pack-destination packages
+          cd packages
+          sha256sum *.tgz > SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        if: matrix.node == 24
+        with:
+          name: sharkiq-package
+          path: packages/
+          if-no-files-found: error
+
+  release-assets:
+    if: github.event_name == 'release'
+    needs: verify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: sharkiq-package
+          path: packages
+      - name: Attach tested package and checksum to the fork release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: gh release upload "$RELEASE_TAG" packages/*.tgz packages/SHA256SUMS

@@ -8,6 +8,36 @@ import crypto from 'node:crypto'
 import { getAuth0Data, setAuth0Data } from '../config.js'
 import { global_vars } from './const.js'
 
+const CLEANING_DIAGNOSTIC_PROPERTIES = [
+  'Operating_Mode',
+  'Operating_Mode_Ex',
+  'CleaningParameters',
+  'SmartMopEnabled',
+  'Flow_Mode',
+  'Power_Mode',
+  'MopPlateAttached',
+  'WaterTankInstalled',
+  'PadPriming',
+  'Refilling',
+  'mission_state',
+  'robot_status',
+] as const
+
+/** Exclude account, network, serial, and Matter commissioning data from logs. */
+export function selectCleaningDiagnostics(properties: Record<string, unknown> = {}): Record<string, unknown> {
+  const selected: Record<string, unknown> = {}
+  for (const name of CLEANING_DIAGNOSTIC_PROPERTIES) {
+    const entry = properties[name]
+    if (entry === undefined) {
+      continue
+    }
+    selected[name] = entry && typeof entry === 'object' && 'value' in entry
+      ? { value: entry.value, updatedAt: (entry as Record<string, unknown>).updatedAt }
+      : entry
+  }
+  return selected
+}
+
 // One vacuum as the newer SharkNinja API describes it
 export interface SkegoxDevice {
   /** The Ayla DSN, read from the battery serial number */
@@ -179,7 +209,7 @@ export class SkegoxApi {
             dsn,
             deviceId,
             name: String(label),
-            model: String(device?.registry?.Model_Number ?? ''),
+            model: String(device?.registry?.Device_Model_Number ?? device?.registry?.Model_Number ?? ''),
             connected,
           })
           this.log.debug(`Mapped vacuum DSN ${dsn} ("${label}") to new-API device ${deviceId} (connected: ${connected}).`)
@@ -210,10 +240,11 @@ export class SkegoxApi {
     if (!deviceId || !this.household_id) {
       return Promise.reject(new Error(`Vacuum ${dsn} is not mapped on the new SharkNinja API.`))
     }
-    const response = await this.request('PATCH', `/devicesEndUserController/${this.household_id}/devices/${deviceId}`, {
+    await this.request('PATCH', `/devicesEndUserController/${this.household_id}/devices/${deviceId}`, {
       shadow: { properties: { desired: { [propertyName]: value } } },
     })
-    this.log.debug(`New-API response for setting ${propertyName}: ${JSON.stringify(response)}`)
+    this.log.debug(`New-API accepted desired property ${propertyName}.`)
+    this.state_cache.delete(String(dsn).trim().toUpperCase())
   }
 
   // Read the vacuum's live state (telemetry plus reported shadow properties),
@@ -232,6 +263,17 @@ export class SkegoxApi {
     }
     const device = await this.request('GET', `/devicesEndUserController/${this.household_id}/devices/${deviceId}`)
     const values: Record<string, unknown> = {}
+    const model = device?.registry?.Device_Model_Number ?? device?.registry?.Model_Number
+    if (model) {
+      values.Device_Model_Number = model
+    }
+    if (model === 'RV3020XEUS') {
+      values._RV3020DesiredOperatingMode = device?.shadow?.properties?.desired?.Operating_Mode?.value
+    }
+    const desired = selectCleaningDiagnostics(device?.shadow?.properties?.desired ?? {})
+    const reported = selectCleaningDiagnostics(device?.shadow?.properties?.reported ?? {})
+    const telemetry = selectCleaningDiagnostics(device?.telemetry ?? {})
+    this.log.debug(`New-API cleaning diagnostics (${model ?? 'unknown model'}): telemetry=${JSON.stringify(telemetry)} desired=${JSON.stringify(desired)} reported=${JSON.stringify(reported)}`)
     Object.entries(device?.telemetry ?? {}).forEach(([k, v]) => {
       values[k] = v
     })

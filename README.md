@@ -5,6 +5,11 @@
 
 ## homebridge-sharkiq
 
+**mj261 fork:** RV3020XEUS Vacuum / Mop / Vacuum + Mop support, maintained in
+source with regression tests. See [fork installation, releases, and upstream
+updates](FORK.md). Install this fork's built packages; ordinary SharkIQ registry
+updates can replace these changes.
+
 Homebridge plugin to integrate Shark IQ robot vacuums into HomeKit
 
 [![npm](https://img.shields.io/npm/v/@homebridge-plugins/homebridge-sharkiq/latest?label=latest)](https://www.npmjs.com/package/@homebridge-plugins/homebridge-sharkiq)

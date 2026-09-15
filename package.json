@@ -1,8 +1,8 @@
 {
   "name": "@homebridge-plugins/homebridge-sharkiq",
-  "displayName": "SharkIQ Plugin",
+  "displayName": "SharkIQ (mj261 fork)",
   "type": "module",
-  "version": "1.6.5",
+  "version": "1.6.5-mj261.1",
   "description": "A Homebridge plugin to connect your Shark Vacuum to homebridge.",
   "author": {
     "name": "Bubba8291",
@@ -18,10 +18,10 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/homebridge-plugins/homebridge-sharkiq.git"
+    "url": "git+https://github.com/mj261/homebridge-sharkiq.git"
   },
   "bugs": {
-    "url": "https://github.com/homebridge-plugins/homebridge-sharkiq/issues"
+    "url": "https://github.com/mj261/homebridge-sharkiq"
   },
   "keywords": [
     "homebridge-plugin",

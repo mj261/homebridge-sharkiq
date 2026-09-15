@@ -22,6 +22,7 @@ concurrency:
 
 jobs:
   deprecate-previous-pre-release-data:
+    if: github.repository == 'homebridge-plugins/homebridge-sharkiq'
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
