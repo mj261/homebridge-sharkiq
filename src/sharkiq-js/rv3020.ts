@@ -134,18 +134,48 @@ export interface RV3020LiveProgress {
   percent?: number
 }
 
+function pointOnSegment(
+  point: { x: number, y: number },
+  start: { x: number, y: number },
+  end: { x: number, y: number },
+): boolean {
+  const cross = (point.y - start.y) * (end.x - start.x) - (point.x - start.x) * (end.y - start.y)
+  if (Math.abs(cross) > 1e-7) {
+    return false
+  }
+  const dot = (point.x - start.x) * (end.x - start.x) + (point.y - start.y) * (end.y - start.y)
+  const lengthSquared = (end.x - start.x) ** 2 + (end.y - start.y) ** 2
+  return dot >= 0 && dot <= lengthSquared
+}
+
+/** Boundary-inclusive ray casting for Shark's free-form room polygons. */
+function pointInPolygon(point: { x: number, y: number }, polygon: Array<{ x: number, y: number }>): boolean {
+  let inside = false
+  for (let index = 0, previous = polygon.length - 1; index < polygon.length; previous = index++) {
+    const start = polygon[previous]
+    const end = polygon[index]
+    if (pointOnSegment(point, start, end)) {
+      return true
+    }
+    if ((start.y > point.y) !== (end.y > point.y)
+      && point.x < (end.x - start.x) * (point.y - start.y) / (end.y - start.y) + start.x) {
+      inside = !inside
+    }
+  }
+  return inside
+}
+
 /** Match Shark's live zone id to the 1-based Matter area id in Home's room list. */
 export function rv3020LiveProgress(vacuum: SharkIqVacuum): RV3020LiveProgress {
   const live = parseRecord(vacuum.get_property_value(Properties.LIVE_PROGRESS))
   const floor = typeof live?.floor === 'string' ? live.floor : undefined
   let zone = typeof live?.zone === 'string' ? live.zone.trim() : ''
+  const locationRaw = vacuum.get_property_value(Properties.LIVE_LOCATION)
+  const location = parseRecord(locationRaw)
 
   // Some firmware publishes the current zone in LiveLocation rather than in
-  // live_progress. Only accept a named zone/room; raw map coordinates cannot be
-  // mapped honestly without retaining Shark's map geometry.
+  // live_progress.
   if (!zone) {
-    const locationRaw = vacuum.get_property_value(Properties.LIVE_LOCATION)
-    const location = parseRecord(locationRaw)
     const candidate = location?.zone ?? location?.Zone ?? location?.room ?? location?.Room
     if (typeof candidate === 'string') {
       zone = candidate.trim()
@@ -161,6 +191,24 @@ export function rv3020LiveProgress(vacuum: SharkIqVacuum): RV3020LiveProgress {
     const displayName = roomMap?.nameMap[zone] ?? zone
     const index = rooms.findIndex(room => room === displayName || room === zone)
     areaId = index < 0 ? null : index + 1
+  }
+
+  // RV3020XEUS leaves both live zone fields blank during whole-house runs, but
+  // publishes x/y in LiveLocation. MARD polygons use that coordinate system.
+  // Resolve the coordinate only on the matching floor; if it is in a doorway
+  // or outside every room, retain an unknown area instead of guessing.
+  if (areaId === null && roomMap && (!floor || !roomMap.floorId || floor === roomMap.floorId)) {
+    const x = readNumber(location?.x_coord ?? location?.x)
+    const y = readNumber(location?.y_coord ?? location?.y)
+    if (x !== undefined && y !== undefined) {
+      const currentZone = Object.entries(roomMap.polygons ?? {})
+        .find(([, polygon]) => pointInPolygon({ x, y }, polygon))?.[0]
+      if (currentZone) {
+        const displayName = roomMap.nameMap[currentZone] ?? currentZone
+        const index = rooms.findIndex(room => room === displayName || room === currentZone)
+        areaId = index < 0 ? null : index + 1
+      }
+    }
   }
 
   const rawPercent = readNumber(live?.percent)
