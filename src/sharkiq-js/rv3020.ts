@@ -92,9 +92,10 @@ export interface RV3020MaintenanceError {
 
 /**
  * Read maintenance conditions whose meaning is explicit in the RV3020 shadow.
- * Unknown dock/warning codes are still surfaced, but only as a generic error;
- * assigning a specific label to an undocumented numeric code would be worse
- * than keeping the exact number in the details.
+ * Unknown dock error codes are surfaced as a generic error with their exact
+ * number. Warning_Code is deliberately diagnostic-only: hardware captures
+ * show warning 8 during a healthy vacuum-only mission, so promoting every
+ * undocumented warning to a Matter error creates false failures in Home.
  */
 export function rv3020MaintenanceError(vacuum: SharkIqVacuum, running: boolean): RV3020MaintenanceError | undefined {
   const dock = parseRecord(vacuum.get_property_value(Properties.DOCK_SENSOR_DATA))
@@ -124,10 +125,6 @@ export function rv3020MaintenanceError(vacuum: SharkIqVacuum, running: boolean):
   const dockErrorCode = readNumber(vacuum.get_property_value(Properties.DOCK_ERROR_CODE))
   if (dockErrorCode !== undefined && dockErrorCode !== 0) {
     return { errorStateId: RV3020_MAINTENANCE_ERROR_STATE.unableToCompleteOperation, errorStateDetails: `Dock error (code ${dockErrorCode})` }
-  }
-  const warningCode = readNumber(vacuum.get_property_value(Properties.WARNING_CODE))
-  if (warningCode !== undefined && warningCode !== 0) {
-    return { errorStateId: RV3020_MAINTENANCE_ERROR_STATE.unableToCompleteOperation, errorStateDetails: `Vacuum warning (code ${warningCode})` }
   }
   return undefined
 }

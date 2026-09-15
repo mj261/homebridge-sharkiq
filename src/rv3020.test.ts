@@ -217,6 +217,12 @@ describe('rV3020 Matter integration', () => {
     expect(rv3020MaintenanceError(vacuum, false)).toEqual({ errorStateId: 2, errorStateDetails: 'Dock error (code 23)' })
   })
 
+  it('does not promote undocumented warnings emitted during a healthy mission', () => {
+    const vacuum = robot()
+    vacuum.values.Warning_Code = 8
+    expect(rv3020MaintenanceError(vacuum, true)).toBeUndefined()
+  })
+
   it('only reports missing mopping parts during a pure mop job', () => {
     const vacuum = robot()
     vacuum.values.Operating_Mode = 7

@@ -26,14 +26,16 @@ The fork also loads Shark's MARD map file: Home receives every user-facing room
 name while room commands are translated back to the internal `AZ_N` identifiers
 the robot expects. Whole-house and room jobs are supported. Dock before changing
 the method. Matter also reports the base's emptying, mop-cleaning, and refilling
-operations; clean/dirty water conditions and nonzero dock warnings; and the
+operations; explicit clean/dirty water conditions and dock errors; and the
 current room plus pending/operating/completed/skipped room status. A single-room
 job receives an estimated end time when Shark supplies a usable percentage.
 Whole-house ETA is deliberately omitted because Shark reports mission-wide—not
 per-room—percentage. Resume sends the selected explicit method; whether the firmware
 continues the same job or starts a new job still needs hardware confirmation.
 Pause and dock keep upstream's commands. Selection defaults to Vacuum after
-restarting Homebridge.
+restarting Homebridge. Undocumented `Warning_Code` values remain visible in
+debug diagnostics but are not presented as failures: the RV3020 reports warning
+8 during a healthy vacuum-only mission.
 
 ## Installation and update policy
 
@@ -58,7 +60,7 @@ the first release (adjust filenames for subsequent releases):
 
 ```bash
 sudo mkdir -p /var/lib/homebridge/plugin-releases
-sudo cp homebridge-plugins-homebridge-sharkiq-1.6.5-mj261.5.tgz /var/lib/homebridge/plugin-releases/
+sudo cp homebridge-plugins-homebridge-sharkiq-1.6.5-mj261.6.tgz /var/lib/homebridge/plugin-releases/
 sudo tar -czf "$HOME/sharkiq-before-fork-$(date +%Y%m%d-%H%M%S).tgz" \
   -C /var/lib/homebridge/node_modules/@homebridge-plugins homebridge-sharkiq
 sudo cp -a /var/lib/homebridge/package.json /var/lib/homebridge/plugin-releases/package.before-fork.json
@@ -66,7 +68,7 @@ sudo cp -a /var/lib/homebridge/package.json /var/lib/homebridge/plugin-releases/
 sudo hb-service stop
 sudo env PATH="/opt/homebridge/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
   /opt/homebridge/bin/npm --prefix /var/lib/homebridge install --save-exact \
-  /var/lib/homebridge/plugin-releases/homebridge-plugins-homebridge-sharkiq-1.6.5-mj261.5.tgz
+  /var/lib/homebridge/plugin-releases/homebridge-plugins-homebridge-sharkiq-1.6.5-mj261.6.tgz
 sudo hb-service start
 ```
 

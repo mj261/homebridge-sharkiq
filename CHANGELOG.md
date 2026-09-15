@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file. This project uses [Semantic Versioning](https://semver.org/)
 
+## v1.6.5-mj261.6 (2026-09-15)
+
+### Changed
+
+- fix(matter): ignore benign RV3020 warning codes during healthy cleaning
+
 ## v1.6.5-mj261.5 (2026-09-15)
 
 ### Changed
