@@ -11,6 +11,8 @@ import { global_vars } from './const.js'
 const CLEANING_DIAGNOSTIC_PROPERTIES = [
   'Operating_Mode',
   'Operating_Mode_Ex',
+  'DockedStatus',
+  'Charging_Status',
   'CleaningParameters',
   'SmartMopEnabled',
   'Flow_Mode',
@@ -52,6 +54,46 @@ export interface SkegoxDevice {
   connected: boolean
 }
 
+/** The authoritative room metadata stored in Shark's MARD map file. */
+export interface SkegoxRoomMap {
+  floorId: string
+  /** Human-readable labels shown in the SharkClean app. */
+  rooms: string[]
+  /** Robot zone id (for example AZ_8) to human-readable label. */
+  nameMap: Record<string, string>
+}
+
+/** Parse a Mobile_App_Room_Definition (MARD) file without retaining map geometry. */
+export function parseMard(raw: unknown): SkegoxRoomMap | undefined {
+  let parsed: any
+  try {
+    parsed = typeof raw === 'string' ? JSON.parse(raw) : raw
+  } catch {
+    return undefined
+  }
+  if (!parsed || typeof parsed !== 'object' || !Array.isArray(parsed.areas)) {
+    return undefined
+  }
+
+  const nameMap: Record<string, string> = {}
+  const rooms: string[] = []
+  for (const area of parsed.areas) {
+    if (!area || typeof area !== 'object' || !String(area.area_meta_data ?? '').startsWith('UserRoom:')) {
+      continue
+    }
+    const robotName = String(area.robot_room_name ?? '').trim()
+    if (!robotName) {
+      continue
+    }
+    const displayName = String(area.user_room_name ?? '').trim() || robotName
+    nameMap[robotName] = displayName
+    rooms.push(displayName)
+  }
+
+  const floorId = typeof parsed.floor_id === 'string' ? parsed.floor_id : ''
+  return rooms.length ? { floorId, rooms, nameMap } : undefined
+}
+
 // Client for the newer SharkNinja device API used by the current SharkClean
 // app. Newer vacuums only act on commands sent through this API - the Ayla
 // API accepts the same commands but the vacuum ignores them (#68).
@@ -68,6 +110,7 @@ export class SkegoxApi {
   private dsn_to_device_id: Map<string, string> = new Map()
   private mapped_devices: SkegoxDevice[] = []
   private state_cache: Map<string, { at: number, values: Record<string, unknown> }> = new Map()
+  private room_maps: Map<string, SkegoxRoomMap> = new Map()
 
   constructor(log: Logger, auth0_file: string, europe = false) {
     this.log = log
@@ -154,6 +197,42 @@ export class SkegoxApi {
     return response.json().catch(() => null)
   }
 
+  /** Fetch a file property via Shark's wrapper and its short-lived object URL. */
+  private async fetchPropertyFile(deviceId: string, propertyName: string): Promise<string | undefined> {
+    if (!this.household_id) {
+      return undefined
+    }
+    const wrapper = await this.request(
+      'GET',
+      `/devicesEndUserController/${this.household_id}/devices/${deviceId}/property-files?properties=${encodeURIComponent(propertyName)}`,
+    )
+    const url = wrapper?.files?.[0]?.presignedUrl
+    if (typeof url !== 'string' || !url.startsWith('http')) {
+      return undefined
+    }
+    const response = await fetch(url)
+    if (!response.ok) {
+      return undefined
+    }
+    return response.text()
+  }
+
+  private async loadRoomMap(dsn: string, deviceId: string, label: string): Promise<void> {
+    try {
+      const roomMap = parseMard(await this.fetchPropertyFile(deviceId, 'MARD'))
+      if (!roomMap) {
+        this.log.debug(`No MARD room map available for "${label}" (${dsn}).`)
+        return
+      }
+      this.room_maps.set(dsn, roomMap)
+      this.log.debug(`MARD room map for "${label}" (${dsn}): floor "${roomMap.floorId}" with ${roomMap.rooms.length} room(s): ${roomMap.rooms.join(', ')}`)
+    } catch (error) {
+      // Map metadata is optional. A transient object-store failure must not
+      // prevent the vacuum itself from being discovered.
+      this.log.debug(`Unable to read MARD room map for "${label}" (${dsn}): ${error}`)
+    }
+  }
+
   // Discover the user id (from the signed-in token), the household, and each
   // device, and build a map from each vacuum's Ayla DSN to its device id on
   // this API. Returns the number of vacuums that were mapped.
@@ -212,6 +291,7 @@ export class SkegoxApi {
             model: String(device?.registry?.Device_Model_Number ?? device?.registry?.Model_Number ?? ''),
             connected,
           })
+          await this.loadRoomMap(dsn, deviceId, String(label))
           this.log.debug(`Mapped vacuum DSN ${dsn} ("${label}") to new-API device ${deviceId} (connected: ${connected}).`)
         } else {
           this.log.debug(`New-API device ${deviceId} ("${label}") has no battery serial number, cannot map it to a DSN.`)
@@ -226,6 +306,14 @@ export class SkegoxApi {
   // Every vacuum this API knows about, in the order it listed them
   listDevices(): SkegoxDevice[] {
     return [...this.mapped_devices]
+  }
+
+  /** Current user-facing room names plus the robot ids needed in commands. */
+  getRoomMap(dsn: string): SkegoxRoomMap | undefined {
+    const roomMap = this.room_maps.get(String(dsn).trim().toUpperCase())
+    return roomMap
+      ? { floorId: roomMap.floorId, rooms: [...roomMap.rooms], nameMap: { ...roomMap.nameMap } }
+      : undefined
   }
 
   // Whether commands for this vacuum can be sent through this API

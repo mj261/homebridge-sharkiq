@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { Properties } from './properties.js'
-import { AREA_FILTER_PROPERTIES, areaIdsToRoomNames, buildServiceAreaCluster, buildSupportedAreas, chooseAreaFilterProperty, describeAreaFilter, describeRoomList, encodeRoomListV3, ROOM_CLEAN_DEFAULTS, ROOM_CLEAN_PRESETS } from './sharkiq.js'
+import { AREA_FILTER_PROPERTIES, areaIdsToRoomNames, buildServiceAreaCluster, buildSupportedAreas, chooseAreaFilterProperty, describeAreaFilter, describeRoomList, encodeRoomListV3, ROOM_CLEAN_DEFAULTS, ROOM_CLEAN_PRESETS, SharkIqVacuum } from './sharkiq.js'
 
 /**
  * Room-specific cleaning (#41) depends on the vacuum publishing
@@ -210,6 +210,31 @@ describe('areaIdsToRoomNames', () => {
 
   it('handles an empty selection', () => {
     expect(areaIdsToRoomNames([], HIS_ROOMS)).toEqual([])
+  })
+})
+
+describe('mard room metadata', () => {
+  it('shows display names while sending the matching robot zone ids', () => {
+    const vacuum = new SharkIqVacuum({} as any, {
+      dsn: 'DSN1',
+      key: '',
+      oem_model: 'RV3020XEUS',
+      product_name: 'Olivia',
+    }, { debug: () => {} } as any)
+    vacuum.property_values.Robot_Room_List = 'OLD_FLOOR:AZ_8:AZ_10'
+    vacuum.skegox = {
+      getRoomMap: () => ({
+        floorId: 'CURRENT_FLOOR',
+        rooms: ['Kitchen', 'Living Room'],
+        nameMap: { AZ_8: 'Kitchen', AZ_10: 'Living Room' },
+      }),
+    } as any
+
+    expect(vacuum.get_room_list()).toEqual(['Kitchen', 'Living Room'])
+    expect(vacuum.get_room_clean_target(['Living Room'])).toEqual({
+      identifier: 'CURRENT_FLOOR',
+      rooms: ['AZ_10'],
+    })
   })
 })
 

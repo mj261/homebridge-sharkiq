@@ -5,7 +5,7 @@ import { join } from 'node:path'
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { SkegoxApi } from './skegox_api.js'
+import { parseMard, SkegoxApi } from './skegox_api.js'
 
 const log = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() } as any
 
@@ -25,7 +25,7 @@ function writeAuth0File(dir: string, msUntilExpiry = 3600 * 1000): string {
 }
 
 // A fetch stub that answers the discovery, command and token-refresh routes
-function stubFetch(overrides: { failFirstPatch?: boolean } = {}): ReturnType<typeof vi.fn> {
+function stubFetch(overrides: { failFirstPatch?: boolean, mard?: unknown } = {}): ReturnType<typeof vi.fn> {
   let patchCount = 0
   const mock = vi.fn(async (url: string, options: any = {}) => {
     const ok = (data: unknown) => ({ ok: true, status: 200, json: async () => data, text: async () => '' })
@@ -37,6 +37,17 @@ function stubFetch(overrides: { failFirstPatch?: boolean } = {}): ReturnType<typ
     }
     if (url.includes('/users/user123')) {
       return ok({ items: [{ deviceId: 'SND1' }] })
+    }
+    if (url.includes('/property-files')) {
+      return ok(overrides.mard === undefined
+        ? { count: 0, files: [] }
+        : {
+            count: 1,
+            files: [{ presignedUrl: 'https://object-store.test/mard' }],
+          })
+    }
+    if (url === 'https://object-store.test/mard') {
+      return { ...ok({}), text: async () => JSON.stringify(overrides.mard) }
     }
     if (url.includes('/devices/SND1') && options.method === 'GET') {
       return ok({
@@ -78,6 +89,30 @@ describe('skegoxApi', () => {
     expect(api.available('DSN123')).toBe(true)
     expect(api.available(' dsn123 ')).toBe(true)
     expect(api.available('OTHER')).toBe(false)
+  })
+
+  it('reads authoritative display names and robot ids from the MARD map file', async () => {
+    stubFetch({ mard: {
+      floor_id: 'FLOOR1',
+      areas: [
+        { area_meta_data: 'UserRoom:1', robot_room_name: 'AZ_8', user_room_name: 'Kitchen' },
+        { area_meta_data: 'UserRoom:2', robot_room_name: 'AZ_10', user_room_name: 'Living Room' },
+        { area_meta_data: 'CarpetZone:3', robot_room_name: 'CZ_3', user_room_name: 'Rug' },
+      ],
+    } })
+    const api = new SkegoxApi(log, writeAuth0File(dir))
+    await api.init()
+
+    expect(api.getRoomMap('dsn123')).toEqual({
+      floorId: 'FLOOR1',
+      rooms: ['Kitchen', 'Living Room'],
+      nameMap: { AZ_8: 'Kitchen', AZ_10: 'Living Room' },
+    })
+  })
+
+  it('ignores malformed and non-room MARD data', () => {
+    expect(parseMard('not json')).toBeUndefined()
+    expect(parseMard({ areas: [{ area_meta_data: 'CarpetZone:1', robot_room_name: 'CZ_1' }] })).toBeUndefined()
   })
 
   it('names a vacuum the registry has no name for, rather than calling it "unnamed"', async () => {

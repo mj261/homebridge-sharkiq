@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file. This project uses [Semantic Versioning](https://semver.org/)
 
+## v1.6.5-mj261.3 (2026-09-14)
+
+### Changed
+
+- fix(matter): track RV3020 cleaning, return-to-dock, charging, and docked states from its live robot status
+- fix: load the authoritative MARD map so Matter shows every room with its SharkClean display name
+- feat: translate MARD display names back to robot zone ids for RV3020 room cleaning
+
 ## v1.6.5 (2026-08-21)
 
 ### Changed

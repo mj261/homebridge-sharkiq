@@ -6,7 +6,7 @@ import { TIMEOUTS } from './constants.js'
 import { createPromiseRejectionHandler } from './errorHandling.js'
 import { SharkIQPlatform } from './platform.js'
 import { PLATFORM_NAME, PLUGIN_NAME } from './settings.js'
-import { isRV3020, isRV3020Mode, RV3020_CLEAN_MODES, rv3020CleanMode, selectRV3020Mode, startRV3020 } from './sharkiq-js/rv3020.js'
+import { isRV3020, isRV3020Mode, RV3020_CLEAN_MODES, rv3020CleanMode, rv3020MatterState, selectRV3020Mode, startRV3020 } from './sharkiq-js/rv3020.js'
 import { areaIdsToRoomNames, buildServiceAreaCluster, isKnownCleanMode, MATTER_CLEAN_MODES, matterOperationalError, matterPowerSourceState, OperatingModes, PAUSED_OPERATING_MODE, Properties } from './sharkiq-js/sharkiq.js'
 import { safeTimerMs } from './utils.js'
 
@@ -227,6 +227,10 @@ export class SharkIQMatterPlatform extends SharkIQPlatform {
             currentMode: rv3020CleanMode(vacuumDevice),
           }
         }
+        const rooms = vacuumDevice.get_room_list?.() ?? []
+        if (rooms.length) {
+          matterAccessory.clusters.serviceArea = buildServiceAreaCluster(rooms)
+        }
         cachedActiveMatterAccessories.push(matterAccessory)
         // Homebridge attaches registration to an existing restored endpoint.
         accessoriesToRegister.push(matterAccessory)
@@ -438,6 +442,9 @@ export class SharkIQMatterPlatform extends SharkIQPlatform {
         await vacuumDevice.update([
           Properties.DOCKED_STATUS,
           Properties.OPERATING_MODE,
+          Properties.OPERATING_MODE_EX,
+          Properties.ROBOT_STATUS,
+          Properties.MISSION_STATE,
           Properties.POWER_MODE,
           Properties.BATTERY_CAPACITY,
           Properties.CHARGING_STATUS,
@@ -457,23 +464,28 @@ export class SharkIQMatterPlatform extends SharkIQPlatform {
         const isPaused = vacuumDevice.is_paused()
         const isDocked = invertDockedStatus ? dockedStatus !== 1 : dockedStatus === 1
 
-        let operationalState = 66 // Docked
-        if (!isDocked) {
-          if (!isActive) {
-            operationalState = 0 // Stopped
-          } else if (isPaused) {
-            operationalState = 2 // Paused
-          } else {
-            operationalState = 1 // Running
+        let operationalState: number
+        let runMode: number
+        if (combo) {
+          ({ operationalState, runMode } = rv3020MatterState(vacuumDevice, invertDockedStatus))
+        } else {
+          operationalState = 66 // Docked
+          if (!isDocked) {
+            if (!isActive) {
+              operationalState = 0 // Stopped
+            } else if (isPaused) {
+              operationalState = 2 // Paused
+            } else {
+              operationalState = 1 // Running
+            }
           }
+          runMode = isActive ? 1 : 0 // 1 = Cleaning, 0 = Idle
         }
-
-        const runMode = isActive ? 1 : 0 // 1 = Cleaning, 0 = Idle
 
         // Faults and an empty water tank, as Matter's own error states (#88).
         const fault = vacuumDevice.fault()
         const waterTank = vacuumDevice.water_tank()
-        const operationalError = matterOperationalError(fault, waterTank, isActive && !isPaused)
+        const operationalError = matterOperationalError(fault, waterTank, runMode === 1 && operationalState === 1)
 
         if (typeof matterApi.updateAccessoryState === 'function') {
           await matterApi.updateAccessoryState(uuid, 'rvcRunMode', { currentMode: runMode })
@@ -503,7 +515,8 @@ export class SharkIQMatterPlatform extends SharkIQPlatform {
 
         this.log.debug(`[Matter] Vacuum ${vacuumDevice._dsn}: runMode=${runMode}, operationalState=${operationalState}, `
           + `battery=${battery.percent ?? 'unknown'}%${battery.charging ? ' (charging)' : ''}, cleanMode=${cleanMode}, `
-          + `errorState=${operationalError.errorStateId}`)
+          + `errorState=${operationalError.errorStateId}${
+            combo ? `, operatingMode=${mode}, robotStatus=${vacuumDevice.get_property_value(Properties.ROBOT_STATUS) ?? 'unknown'}` : ''}`)
         this.log.debug(
           '[Matter] Error code:',
           fault?.code ?? 0,

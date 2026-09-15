@@ -17,11 +17,15 @@ start without moving the robot. Modes 6–8 report as running; other models reta
 the upstream command path. Model discovery uses Device_Model_Number, and API
 debug output excludes the full device response.
 
-Whole-house jobs are supported. Leave rooms unselected; RV3020 room payloads
-have not been verified. Dock before changing the method. Resume sends the
-selected explicit method; whether the firmware continues the same job or starts
-a new job still needs hardware confirmation. Pause and dock keep upstream's
-commands. Selection defaults to Vacuum after restarting Homebridge.
+The RV3020's live robot status distinguishes cleaning, seeking the charger,
+charging, and docked states even when its older DockedStatus property is stale.
+The fork also loads Shark's MARD map file: Home receives every user-facing room
+name while room commands are translated back to the internal `AZ_N` identifiers
+the robot expects. Whole-house and room jobs are supported. Dock before changing
+the method. Resume sends the selected explicit method; whether the firmware
+continues the same job or starts a new job still needs hardware confirmation.
+Pause and dock keep upstream's commands. Selection defaults to Vacuum after
+restarting Homebridge.
 
 ## Installation and update policy
 
@@ -46,14 +50,15 @@ the first release (adjust filenames for subsequent releases):
 
 ```bash
 sudo mkdir -p /var/lib/homebridge/plugin-releases
-sudo cp homebridge-plugins-homebridge-sharkiq-1.6.5-mj261.2.tgz /var/lib/homebridge/plugin-releases/
+sudo cp homebridge-plugins-homebridge-sharkiq-1.6.5-mj261.3.tgz /var/lib/homebridge/plugin-releases/
 sudo tar -czf "$HOME/sharkiq-before-fork-$(date +%Y%m%d-%H%M%S).tgz" \
   -C /var/lib/homebridge/node_modules/@homebridge-plugins homebridge-sharkiq
 sudo cp -a /var/lib/homebridge/package.json /var/lib/homebridge/plugin-releases/package.before-fork.json
 # Also save package-lock.json here if it exists.
 sudo hb-service stop
-sudo npm --prefix /var/lib/homebridge install --save-exact \
-  /var/lib/homebridge/plugin-releases/homebridge-plugins-homebridge-sharkiq-1.6.5-mj261.2.tgz
+sudo env PATH="/opt/homebridge/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
+  /opt/homebridge/bin/npm --prefix /var/lib/homebridge install --save-exact \
+  /var/lib/homebridge/plugin-releases/homebridge-plugins-homebridge-sharkiq-1.6.5-mj261.3.tgz
 sudo hb-service start
 ```
 
@@ -114,10 +119,11 @@ fork synchronization, which can discard the custom commits.
 
 ## Validation
 
-The tests cover command mapping, selection/start separation, native app state,
-polling, restored handlers, other-model behavior, and diagnostic filtering.
-They use synthetic fixtures, not account logs or credentials. Hardware and
-Apple Home presentation still require confirmation on the installed release.
+The tests cover command mapping, selection/start separation, RV3020 live-state
+translation, MARD room parsing, display-name-to-zone translation, polling,
+restored handlers, other-model behavior, and diagnostic filtering. They use
+synthetic fixtures, not account logs or credentials. Hardware and Apple Home
+presentation still require confirmation on the installed release.
 
 Original project: https://github.com/homebridge-plugins/homebridge-sharkiq
 Original Apache-2.0 license and attribution are retained.

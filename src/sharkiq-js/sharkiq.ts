@@ -1024,24 +1024,44 @@ class SharkIqVacuum {
 
   // Get object of the device room list for starting a clean
   _get_device_room_list(): { identifier: string, rooms: string[] } {
+    const rawRoomList = this.get_property_value(Properties.ROBOT_ROOM_LIST)
+    const rawParts = typeof rawRoomList === 'string' && rawRoomList !== '' ? rawRoomList.split(':') : []
+    const mard = this.skegox?.getRoomMap(this._dsn)
+    if (mard?.rooms.length) {
+      return { identifier: mard.floorId || rawParts[0] || '', rooms: mard.rooms }
+    }
     // Many models never report Robot_Room_List at all. This used to call .split()
     // on undefined and throw, which aborted Matter registration entirely and left
     // the owner with no accessories - after the cached HAP ones had already been
     // removed.
-    const room_list = this.get_property_value(Properties.ROBOT_ROOM_LIST)
-    if (typeof room_list !== 'string' || room_list === '') {
+    if (rawParts.length === 0) {
       return { identifier: '', rooms: [] }
     }
-    const split = room_list.split(':')
     return {
-      identifier: split[0],
-      rooms: split.slice(1),
+      identifier: rawParts[0],
+      rooms: rawParts.slice(1),
     }
   }
 
   // Get device room list (will output * for all)
   get_room_list() {
     return this._get_device_room_list().rooms
+  }
+
+  /** Convert Home/MARD display labels back to the AZ_N ids Shark expects. */
+  get_room_clean_target(rooms: string[]): { identifier: string, rooms: string[] } {
+    const roomList = this._get_device_room_list()
+    const mard = this.skegox?.getRoomMap(this._dsn)
+    if (!mard) {
+      return { identifier: roomList.identifier, rooms: [...rooms] }
+    }
+    const robotNameByDisplay = Object.fromEntries(
+      Object.entries(mard.nameMap).map(([robotName, displayName]) => [displayName, robotName]),
+    )
+    return {
+      identifier: mard.floorId || roomList.identifier,
+      rooms: rooms.map(room => robotNameByDisplay[room] ?? room),
+    }
   }
 
   // Start the vacuum cleaning
@@ -1053,13 +1073,14 @@ class SharkIqVacuum {
       // filter first told the vacuum to clean an empty set of areas, so it
       // accepted START but never left the dock (#68).
       if (rooms && rooms.length > 0) {
+        const target = this.get_room_clean_target(rooms)
         // Which generation of the area filter this vacuum listens to decides
         // both the property AND the encoding - V3 is JSON, V2 a binary blob, so
         // the two are not interchangeable (#41).
         const property = chooseAreaFilterProperty(this.property_values)
         const payload = property === 'AreasToClean_V3'
-          ? encodeRoomListV3(rooms, this._get_device_room_list().identifier, this.roomCleanOptions)
-          : this._encode_room_list(rooms)
+          ? encodeRoomListV3(target.rooms, target.identifier, this.roomCleanOptions)
+          : this._encode_room_list(target.rooms)
         this.log.debug(`Starting a clean of ${rooms.length} room(s) via ${property}: ${payload}`)
         await this.set_property_value(property, payload)
       } else {

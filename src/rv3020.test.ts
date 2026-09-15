@@ -1,7 +1,7 @@
 import { RvcCleanMode } from '@matter/types/clusters/rvc-clean-mode'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { isRV3020, RV3020_CLEAN_MODES, rv3020CleanMode, selectRV3020Mode, startRV3020 } from './sharkiq-js/rv3020.js'
+import { isRV3020, RV3020_CLEAN_MODES, rv3020CleanMode, rv3020MatterState, selectRV3020Mode, startRV3020 } from './sharkiq-js/rv3020.js'
 import { selectCleaningDiagnostics, SkegoxApi } from './sharkiq-js/skegox_api.js'
 import { SharkIQMatterPlatform } from './SharkIQMatterPlatform.js'
 
@@ -18,16 +18,17 @@ function robot(model = 'RV3020XEUS') {
     operating_mode: () => values.Operating_Mode,
     is_paused: () => values.Operating_Mode === 0,
     get_room_list: () => ['Kitchen'],
+    get_room_clean_target: (rooms: string[]) => ({ identifier: 'FLOOR1', rooms: rooms.map(room => room === 'Kitchen' ? 'AZ_8' : room) }),
     skegox: { available: () => true, setProperty: vi.fn().mockResolvedValue(undefined) },
     set_property_value: vi.fn().mockResolvedValue(undefined),
     clean_rooms: vi.fn().mockResolvedValue(undefined),
     cancel_clean: vi.fn().mockResolvedValue(undefined),
     update: vi.fn().mockResolvedValue(undefined),
-    docked_status: () => 0,
+    docked_status: () => values.DockedStatus ?? 0,
     power_mode: () => 0,
     fault: () => undefined,
     water_tank: () => ({ installed: false }),
-    battery: () => ({ percent: 100 }),
+    battery: () => ({ percent: 100, charging: values.Charging_Status === 1 }),
     mop_plate_attached: () => false,
   }
   return vacuum
@@ -92,7 +93,7 @@ describe('rV3020 Matter integration', () => {
     expect(rv3020CleanMode(vacuum, true)).toBe(7)
   })
 
-  it('rejects unsupported selections, active mode changes, room jobs, and API failures', async () => {
+  it('rejects unsupported selections and active mode changes, starts room jobs, and propagates API failures', async () => {
     const vacuum = robot()
     const h = platform()._buildMatterHandlers({}, 'test', vacuum)
     await expect(h.rvcCleanMode.changeToMode({ newMode: 2 })).rejects.toThrow('Unsupported')
@@ -100,10 +101,39 @@ describe('rV3020 Matter integration', () => {
     await expect(h.rvcCleanMode.changeToMode({ newMode: 6 })).rejects.toThrow('Dock')
     vacuum.values.Operating_Mode = 3
     await h.serviceArea.selectAreas({ newAreas: [1] })
-    await expect(h.rvcRunMode.changeToMode({ newMode: 1 })).rejects.toThrow('room cleaning')
-    expect(vacuum.skegox.setProperty).not.toHaveBeenCalled()
+    await h.rvcRunMode.changeToMode({ newMode: 1 })
+    expect(vacuum.skegox.setProperty).toHaveBeenNthCalledWith(1, 'TEST', 'AreasToClean_V3', '{"areas_to_clean":{"UserRoom":["AZ_8"]},"clean_count":1,"floor_id":"FLOOR1","cleantype":"dry"}')
+    expect(vacuum.skegox.setProperty).toHaveBeenNthCalledWith(2, 'TEST', 'Operating_Mode', 6)
+    vacuum.skegox.setProperty.mockClear()
     vacuum.skegox.setProperty.mockRejectedValue(new Error('Cloud unavailable'))
     await expect(h.rvcRunMode.changeToMode({ newMode: 1 })).rejects.toThrow('Cloud unavailable')
+  })
+
+  it('uses live robot status ahead of stale dock flags', () => {
+    const vacuum = robot()
+    vacuum.values.DockedStatus = 1
+
+    vacuum.values.Operating_Mode = 6
+    vacuum.values.robot_status = 6
+    expect(rv3020MatterState(vacuum)).toEqual({ runMode: 1, operationalState: 1 })
+
+    vacuum.values.Operating_Mode = 3
+    vacuum.values.robot_status = 7
+    expect(rv3020MatterState(vacuum)).toEqual({ runMode: 0, operationalState: 64 })
+
+    vacuum.values.robot_status = 13
+    vacuum.values.Charging_Status = 0
+    expect(rv3020MatterState(vacuum)).toEqual({ runMode: 0, operationalState: 66 })
+
+    vacuum.values.Charging_Status = 1
+    expect(rv3020MatterState(vacuum)).toEqual({ runMode: 0, operationalState: 65 })
+  })
+
+  it('treats robot status 32 as starting when a clean method is desired', () => {
+    const vacuum = robot()
+    vacuum.values.robot_status = 32
+    vacuum.values._RV3020DesiredOperatingMode = 8
+    expect(rv3020MatterState(vacuum)).toEqual({ runMode: 1, operationalState: 1 })
   })
 
   it('keeps the older model suction and whole-house command path', async () => {
@@ -142,6 +172,7 @@ describe('rV3020 Matter integration', () => {
     p._registerMatterDevices({ registerPlatformAccessories })
     expect(registerPlatformAccessories).toHaveBeenCalledWith(expect.any(String), expect.any(String), [cached])
     expect(cached.clusters.rvcCleanMode.supportedModes).toEqual(RV3020_CLEAN_MODES)
+    expect(cached.clusters.serviceArea.supportedAreas[0].areaInfo.locationInfo.locationName).toBe('Kitchen')
     await cached.handlers.rvcRunMode.changeToMode({ newMode: 1 })
     expect(vacuum.skegox.setProperty).toHaveBeenCalledWith('TEST', 'Operating_Mode', 6)
   })
