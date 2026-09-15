@@ -6,7 +6,7 @@ import { TIMEOUTS } from './constants.js'
 import { createPromiseRejectionHandler } from './errorHandling.js'
 import { SharkIQPlatform } from './platform.js'
 import { PLATFORM_NAME, PLUGIN_NAME } from './settings.js'
-import { isRV3020, isRV3020Mode, RV3020_CLEAN_MODES, rv3020CleanMode, rv3020MatterState, selectRV3020Mode, startRV3020 } from './sharkiq-js/rv3020.js'
+import { isRV3020, isRV3020Mode, RV3020_CLEAN_MODES, rv3020CleanMode, rv3020MatterCleanMode, rv3020MatterState, rv3020ModeSelection, selectRV3020Mode, startRV3020 } from './sharkiq-js/rv3020.js'
 import { areaIdsToRoomNames, buildServiceAreaCluster, isKnownCleanMode, MATTER_CLEAN_MODES, matterOperationalError, matterPowerSourceState, OperatingModes, PAUSED_OPERATING_MODE, Properties } from './sharkiq-js/sharkiq.js'
 import { safeTimerMs } from './utils.js'
 
@@ -185,7 +185,7 @@ export class SharkIQMatterPlatform extends SharkIQPlatform {
             // speed slider - Matter users had no way to change it at all (#88).
             rvcCleanMode: {
               supportedModes: isRV3020(vacuumDevice) ? RV3020_CLEAN_MODES : [...MATTER_CLEAN_MODES],
-              currentMode: isRV3020(vacuumDevice) ? rv3020CleanMode(vacuumDevice) : vacuumDevice.power_mode() ?? 0,
+              currentMode: isRV3020(vacuumDevice) ? rv3020MatterCleanMode(vacuumDevice) : vacuumDevice.power_mode() ?? 0,
             },
             // ServiceArea: room selection, from the vacuum's own map (#41). Only
             // declared when the vacuum reports a room list - advertising an empty
@@ -224,7 +224,7 @@ export class SharkIQMatterPlatform extends SharkIQPlatform {
           matterAccessory.model = 'RV3020XEUS'
           matterAccessory.clusters.rvcCleanMode = {
             supportedModes: RV3020_CLEAN_MODES,
-            currentMode: rv3020CleanMode(vacuumDevice),
+            currentMode: rv3020MatterCleanMode(vacuumDevice),
           }
         }
         const rooms = vacuumDevice.get_room_list?.() ?? []
@@ -340,14 +340,22 @@ export class SharkIQMatterPlatform extends SharkIQPlatform {
       rvcCleanMode: {
         changeToMode: async ({ newMode }: { newMode: number }) => {
           if (isRV3020(vacuumDevice)) {
-            if (!isRV3020Mode(newMode)) {
+            const selection = rv3020ModeSelection(newMode)
+            if (!selection) {
               throw new Error(`Unsupported RV3020 clean mode ${newMode}`)
             }
-            if (isRV3020Mode(vacuumDevice.operating_mode()) || vacuumDevice.is_paused()) {
+            const currentMethod = rv3020CleanMode(vacuumDevice, true)
+            if ((isRV3020Mode(vacuumDevice.operating_mode()) || vacuumDevice.is_paused())
+              && selection.operatingMode !== currentMethod) {
               throw new Error('Dock the RV3020 before changing its cleaning method.')
             }
-            selectRV3020Mode(vacuumDevice, newMode)
+            if (!vacuumDevice.skegox?.available(vacuumDevice._dsn)) {
+              throw new Error('RV3020 speed selection requires the SharkNinja API. Sign in through the OAuth Assistant.')
+            }
+            await vacuumDevice.skegox.setProperty(vacuumDevice._dsn, Properties.POWER_MODE, selection.powerMode)
+            selectRV3020Mode(vacuumDevice, selection.operatingMode, selection.powerMode)
             this.log.info(`RV3020: selected ${RV3020_CLEAN_MODES.find(entry => entry.mode === newMode)!.label}.`)
+            commandSent()
             // Selecting a method prepares the next start; it does not start a job.
             return
           }
@@ -502,7 +510,7 @@ export class SharkIQMatterPlatform extends SharkIQPlatform {
         // rather than only what we last told it (#88).
         const battery = vacuumDevice.battery()
         await matterApi.updateAccessoryState(uuid, 'powerSource', matterPowerSourceState(battery))
-        const cleanMode = combo ? rv3020CleanMode(vacuumDevice, true) : vacuumDevice.power_mode()
+        const cleanMode = combo ? rv3020MatterCleanMode(vacuumDevice, true) : vacuumDevice.power_mode()
         if (combo || isKnownCleanMode(cleanMode)) {
           await matterApi.updateAccessoryState(uuid, 'rvcCleanMode', combo
             ? { supportedModes: RV3020_CLEAN_MODES, currentMode: cleanMode }

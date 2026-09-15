@@ -1,14 +1,14 @@
 import { RvcCleanMode } from '@matter/types/clusters/rvc-clean-mode'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { isRV3020, RV3020_CLEAN_MODES, rv3020CleanMode, rv3020MatterState, selectRV3020Mode, startRV3020 } from './sharkiq-js/rv3020.js'
+import { isRV3020, RV3020_CLEAN_MODES, rv3020CleanMode, rv3020MatterCleanMode, rv3020MatterState, rv3020ModeSelection, selectRV3020Mode, startRV3020 } from './sharkiq-js/rv3020.js'
 import { selectCleaningDiagnostics, SkegoxApi } from './sharkiq-js/skegox_api.js'
 import { SharkIQMatterPlatform } from './SharkIQMatterPlatform.js'
 
 vi.mock('./platform.js', () => ({ SharkIQPlatform: class {} }))
 
 function robot(model = 'RV3020XEUS') {
-  const values: Record<string, any> = { Device_Model_Number: model, Operating_Mode: 3 }
+  const values: Record<string, any> = { Device_Model_Number: model, Operating_Mode: 3, Power_Mode: 0 }
   const vacuum: any = {
     _dsn: 'TEST',
     _name: 'Test robot',
@@ -25,7 +25,7 @@ function robot(model = 'RV3020XEUS') {
     cancel_clean: vi.fn().mockResolvedValue(undefined),
     update: vi.fn().mockResolvedValue(undefined),
     docked_status: () => values.DockedStatus ?? 0,
-    power_mode: () => 0,
+    power_mode: () => values.Power_Mode,
     fault: () => undefined,
     water_tank: () => ({ installed: false }),
     battery: () => ({ percent: 100, charging: values.Charging_Status === 1 }),
@@ -49,26 +49,51 @@ function platform() {
 afterEach(() => vi.useRealTimers())
 
 describe('rV3020 Matter integration', () => {
-  it('recognizes the exact model and advertises the standard mode tags', () => {
+  it('recognizes the exact model and advertises every method at all three speeds', () => {
     expect(isRV3020(robot())).toBe(true)
     expect(isRV3020(robot('RV2820'))).toBe(false)
-    expect(RV3020_CLEAN_MODES[0].modeTags[0].value).toBe(RvcCleanMode.ModeTag.Vacuum)
-    expect(RV3020_CLEAN_MODES[1].modeTags[0].value).toBe(RvcCleanMode.ModeTag.Mop)
-    expect(RV3020_CLEAN_MODES[2].modeTags.map(tag => tag.value))
-      .toEqual(expect.arrayContaining([RvcCleanMode.ModeTag.Vacuum, RvcCleanMode.ModeTag.Mop]))
+    expect(RV3020_CLEAN_MODES).toHaveLength(9)
+    expect(RV3020_CLEAN_MODES.filter(mode => mode.modeTags.some(tag => tag.value === RvcCleanMode.ModeTag.Vacuum))).toHaveLength(6)
+    expect(RV3020_CLEAN_MODES.filter(mode => mode.modeTags.some(tag => tag.value === RvcCleanMode.ModeTag.Mop))).toHaveLength(6)
+    for (const operatingMode of [6, 7, 8]) {
+      const modes = [operatingMode + 10, operatingMode, operatingMode + 20]
+        .map(mode => RV3020_CLEAN_MODES.find(entry => entry.mode === mode)!)
+      expect(modes.map(mode => mode.modeTags.at(-1)?.value))
+        .toEqual([RvcCleanMode.ModeTag.LowEnergy, RvcCleanMode.ModeTag.Auto, RvcCleanMode.ModeTag.Max])
+    }
+    expect(rv3020ModeSelection(6)).toEqual({ operatingMode: 6, powerMode: 0 })
+    expect(rv3020ModeSelection(16)).toEqual({ operatingMode: 6, powerMode: 1 })
+    expect(rv3020ModeSelection(26)).toEqual({ operatingMode: 6, powerMode: 2 })
   })
 
   it.each([6, 7, 8])('selects method %i without starting and sends it on start/resume', async (mode) => {
     const vacuum = robot()
     const handlers = platform()._buildMatterHandlers({}, 'test', vacuum)
     await handlers.rvcCleanMode.changeToMode({ newMode: mode })
-    expect(vacuum.skegox.setProperty).not.toHaveBeenCalled()
+    expect(vacuum.skegox.setProperty).toHaveBeenCalledWith('TEST', 'Power_Mode', 0)
+    expect(vacuum.skegox.setProperty).not.toHaveBeenCalledWith('TEST', 'Operating_Mode', expect.anything())
     expect(vacuum.set_property_value).not.toHaveBeenCalled()
     expect(rv3020CleanMode(vacuum, true)).toBe(mode)
     await handlers.rvcRunMode.changeToMode({ newMode: 1 })
     await handlers.rvcOperationalState.resume()
-    expect(vacuum.skegox.setProperty).toHaveBeenCalledTimes(2)
     expect(vacuum.skegox.setProperty).toHaveBeenLastCalledWith('TEST', 'Operating_Mode', mode)
+    expect(vacuum.skegox.setProperty.mock.calls.filter(([, property]) => property === 'Operating_Mode')).toHaveLength(2)
+  })
+
+  it('keeps the cleaning method while changing speed and sends both settings on the next job', async () => {
+    const vacuum = robot()
+    const handlers = platform()._buildMatterHandlers({}, 'test', vacuum)
+    await handlers.rvcCleanMode.changeToMode({ newMode: 27 })
+    expect(vacuum.skegox.setProperty).toHaveBeenCalledWith('TEST', 'Power_Mode', 2)
+    expect(rv3020CleanMode(vacuum)).toBe(7)
+    expect(rv3020MatterCleanMode(vacuum)).toBe(27)
+    await handlers.rvcRunMode.changeToMode({ newMode: 1 })
+    expect(vacuum.skegox.setProperty).toHaveBeenLastCalledWith('TEST', 'Operating_Mode', 7)
+
+    vacuum.values.Operating_Mode = 7
+    await handlers.rvcCleanMode.changeToMode({ newMode: 17 })
+    expect(vacuum.skegox.setProperty).toHaveBeenLastCalledWith('TEST', 'Power_Mode', 1)
+    await expect(handlers.rvcCleanMode.changeToMode({ newMode: 16 })).rejects.toThrow('Dock')
   })
 
   it('defaults to explicit dry cleaning and preserves idle selections', async () => {
@@ -100,6 +125,7 @@ describe('rV3020 Matter integration', () => {
     vacuum.values.Operating_Mode = 7
     await expect(h.rvcCleanMode.changeToMode({ newMode: 6 })).rejects.toThrow('Dock')
     vacuum.values.Operating_Mode = 3
+    selectRV3020Mode(vacuum, 6)
     await h.serviceArea.selectAreas({ newAreas: [1] })
     await h.rvcRunMode.changeToMode({ newMode: 1 })
     expect(vacuum.skegox.setProperty).toHaveBeenNthCalledWith(1, 'TEST', 'AreasToClean_V3', '{"areas_to_clean":{"UserRoom":["AZ_8"]},"clean_count":1,"floor_id":"FLOOR1","cleantype":"dry"}')
@@ -157,6 +183,19 @@ describe('rV3020 Matter integration', () => {
     expect(updateAccessoryState).toHaveBeenCalledWith('test', 'rvcRunMode', { currentMode: 1 })
     expect(updateAccessoryState).toHaveBeenCalledWith('test', 'rvcOperationalState', { operationalState: 1 })
     expect(updateAccessoryState).toHaveBeenCalledWith('test', 'rvcCleanMode', { currentMode: mode, supportedModes: RV3020_CLEAN_MODES })
+    vi.clearAllTimers()
+  })
+
+  it('reports the current suction level as part of the combined Matter mode', async () => {
+    vi.useFakeTimers()
+    const vacuum = robot()
+    vacuum.values.Operating_Mode = 6
+    vacuum.values.Power_Mode = 1
+    const updateAccessoryState = vi.fn().mockResolvedValue(undefined)
+    const p = platform()
+    p._startVacuumPolling({ updateAccessoryState }, 'test', vacuum)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(updateAccessoryState).toHaveBeenCalledWith('test', 'rvcCleanMode', { currentMode: 16, supportedModes: RV3020_CLEAN_MODES })
     vi.clearAllTimers()
   })
 

@@ -19,6 +19,9 @@ debug output excludes the full device response.
 
 The RV3020's live robot status distinguishes cleaning, seeking the charger,
 charging, and docked states even when its older DockedStatus property is stale.
+Each cleaning method is advertised at Eco, Normal, and Max suction, allowing
+Apple Home to present both its cleaning-method and speed selectors. A speed can
+be changed during a job without changing the active cleaning method.
 The fork also loads Shark's MARD map file: Home receives every user-facing room
 name while room commands are translated back to the internal `AZ_N` identifiers
 the robot expects. Whole-house and room jobs are supported. Dock before changing
@@ -50,7 +53,7 @@ the first release (adjust filenames for subsequent releases):
 
 ```bash
 sudo mkdir -p /var/lib/homebridge/plugin-releases
-sudo cp homebridge-plugins-homebridge-sharkiq-1.6.5-mj261.3.tgz /var/lib/homebridge/plugin-releases/
+sudo cp homebridge-plugins-homebridge-sharkiq-1.6.5-mj261.4.tgz /var/lib/homebridge/plugin-releases/
 sudo tar -czf "$HOME/sharkiq-before-fork-$(date +%Y%m%d-%H%M%S).tgz" \
   -C /var/lib/homebridge/node_modules/@homebridge-plugins homebridge-sharkiq
 sudo cp -a /var/lib/homebridge/package.json /var/lib/homebridge/plugin-releases/package.before-fork.json
@@ -58,7 +61,7 @@ sudo cp -a /var/lib/homebridge/package.json /var/lib/homebridge/plugin-releases/
 sudo hb-service stop
 sudo env PATH="/opt/homebridge/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
   /opt/homebridge/bin/npm --prefix /var/lib/homebridge install --save-exact \
-  /var/lib/homebridge/plugin-releases/homebridge-plugins-homebridge-sharkiq-1.6.5-mj261.3.tgz
+  /var/lib/homebridge/plugin-releases/homebridge-plugins-homebridge-sharkiq-1.6.5-mj261.4.tgz
 sudo hb-service start
 ```
 

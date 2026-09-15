@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file. This project uses [Semantic Versioning](https://semver.org/)
 
+## v1.6.5-mj261.4 (2026-09-15)
+
+### Changed
+
+- fix(matter): preserve Eco, Normal, and Max suction choices for every RV3020 cleaning method
+
 ## v1.6.5-mj261.3 (2026-09-14)
 
 ### Changed
