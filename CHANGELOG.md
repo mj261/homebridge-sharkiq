@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented in this file. This project uses [Semantic Versioning](https://semver.org/)
 
+## v1.6.6-mj261.1 (2026-10-19)
+
+### Changed
+
+- Merge upstream 1.6.6 and latest CI updates while retaining RV3020 Matter support.
+
+## v1.6.7 (Pending Release)
+
+### Changed
+
+- ci: update github actions to their latest versions
+
+## v1.6.6 (2026-10-18)
+
+### Changed
+
+- chore(deps): dependency updates
+
 ## v1.6.5-mj261.7 (2026-09-15)
 
 ### Changed
