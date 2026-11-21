@@ -24,7 +24,9 @@ const BASE_OPERATIONAL_STATES = [0, 1, 2, 3, 64, 65, 66] as const
 function matterOperationalStateList(combo: boolean): Array<{ operationalStateId: number }> {
   return [
     ...BASE_OPERATIONAL_STATES,
-    ...(combo ? Object.values(RV3020_DOCK_OPERATIONAL_STATE) : []),
+    ...(combo
+      ? Object.values(RV3020_DOCK_OPERATIONAL_STATE)
+      : []),
   ].map(operationalStateId => ({ operationalStateId }))
 }
 
@@ -149,7 +151,9 @@ export class SharkIQMatterPlatform extends SharkIQPlatform {
       return
     }
 
-    this.log.info(`Removing ${this.accessories.length} cached HAP accessor${this.accessories.length === 1 ? 'y' : 'ies'} before Matter registration.`)
+    this.log.info(`Removing ${this.accessories.length} cached HAP accessor${this.accessories.length === 1
+      ? 'y'
+      : 'ies'} before Matter registration.`)
     this.api.unregisterPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, [...this.accessories])
     this.accessories.splice(0, this.accessories.length)
   }
@@ -197,8 +201,20 @@ export class SharkIQMatterPlatform extends SharkIQPlatform {
           clusters: {
             rvcRunMode: {
               supportedModes: [
-                { label: 'Idle', mode: 0, modeTags: [{ value: 16384 }] },
-                { label: 'Cleaning', mode: 1, modeTags: [{ value: 16385 }] },
+                {
+                  label: 'Idle',
+                  mode: 0,
+                  modeTags: [
+                    { value: 16384 },
+                  ],
+                },
+                {
+                  label: 'Cleaning',
+                  mode: 1,
+                  modeTags: [
+                    { value: 16385 },
+                  ],
+                },
               ],
               currentMode: 0,
             },
@@ -207,14 +223,20 @@ export class SharkIQMatterPlatform extends SharkIQPlatform {
             // Suction level. Previously only reachable on HAP, where it is a fan
             // speed slider - Matter users had no way to change it at all (#88).
             rvcCleanMode: {
-              supportedModes: isRV3020(vacuumDevice) ? RV3020_CLEAN_MODES : [...MATTER_CLEAN_MODES],
-              currentMode: isRV3020(vacuumDevice) ? rv3020MatterCleanMode(vacuumDevice) : vacuumDevice.power_mode() ?? 0,
+              supportedModes: isRV3020(vacuumDevice)
+                ? RV3020_CLEAN_MODES
+                : [...MATTER_CLEAN_MODES],
+              currentMode: isRV3020(vacuumDevice)
+                ? rv3020MatterCleanMode(vacuumDevice)
+                : vacuumDevice.power_mode() ?? 0,
             },
             // ServiceArea: room selection, from the vacuum's own map (#41). Only
             // declared when the vacuum reports a room list - advertising an empty
             // area list would give a controller a picker with nothing in it.
             ...(vacuumDevice.get_room_list?.()?.length
-              ? { serviceArea: buildServiceAreaCluster(vacuumDevice.get_room_list(), isRV3020(vacuumDevice)) }
+              ? {
+                  serviceArea: buildServiceAreaCluster(vacuumDevice.get_room_list(), isRV3020(vacuumDevice)),
+                }
               : {}),
             rvcOperationalState: {
               // operationalStateLabel is only permitted on manufacturer-specific
@@ -285,7 +307,9 @@ export class SharkIQMatterPlatform extends SharkIQPlatform {
     }
 
     // Remove any Matter accessories whose vacuums are no longer in the config
-    const toUnregister = [...unusedMatterAccessories.values()]
+    const toUnregister = [
+      ...unusedMatterAccessories.values(),
+    ]
     toUnregister.forEach((unusedAccessory) => {
       this.log.info(`Removing unused Matter accessory: ${unusedAccessory.displayName}`)
       this.matterAccessories.delete(unusedAccessory.UUID)
@@ -468,7 +492,9 @@ export class SharkIQMatterPlatform extends SharkIQPlatform {
 
   /** Start (or stage) Matter's per-room progress record for one job. */
   private _beginMatterAreaJob(uuid: string, selectedAreas: number[]): void {
-    const uniqueAreas = [...new Set(selectedAreas)]
+    const uniqueAreas = [
+      ...new Set(selectedAreas),
+    ]
     this.matterSelectedAreas.set(uuid, uniqueAreas)
     this.matterAreaJobs.set(uuid, {
       selectedAreas: uniqueAreas,
@@ -524,7 +550,9 @@ export class SharkIQMatterPlatform extends SharkIQPlatform {
       job.lastPercent = live.percent ?? job.lastPercent
       // A single-room clean has an unambiguous current room even before the
       // live-location telemetry catches up with the start command.
-      const currentArea = live.areaId ?? (job.selectedAreas.length === 1 ? job.selectedAreas[0] : null)
+      const currentArea = live.areaId ?? (job.selectedAreas.length === 1
+        ? job.selectedAreas[0]
+        : null)
       if (currentArea !== null && currentArea !== job.currentArea) {
         if (job.currentArea !== null && job.statuses.get(job.currentArea) === 1) {
           job.statuses.set(job.currentArea, 3)
@@ -561,7 +589,9 @@ export class SharkIQMatterPlatform extends SharkIQPlatform {
 
     const order = job.selectedAreas.length > 0
       ? job.selectedAreas
-      : [...job.statuses.keys()].sort((a, b) => a - b)
+      : [
+          ...job.statuses.keys(),
+        ].sort((a, b) => a - b)
     return {
       selectedAreas: job.selectedAreas,
       currentArea: job.currentArea,
@@ -619,7 +649,9 @@ export class SharkIQMatterPlatform extends SharkIQPlatform {
         const combo = isRV3020(vacuumDevice)
         const isActive = mode === OperatingModes.START || mode === OperatingModes.STOP || (combo && isRV3020Mode(mode))
         const isPaused = vacuumDevice.is_paused()
-        const isDocked = invertDockedStatus ? dockedStatus !== 1 : dockedStatus === 1
+        const isDocked = invertDockedStatus
+          ? dockedStatus !== 1
+          : dockedStatus === 1
 
         let operationalState: number
         let runMode: number
@@ -665,7 +697,9 @@ export class SharkIQMatterPlatform extends SharkIQPlatform {
         // rather than only what we last told it (#88).
         const battery = vacuumDevice.battery()
         await matterApi.updateAccessoryState(uuid, 'powerSource', matterPowerSourceState(battery))
-        const cleanMode = combo ? rv3020MatterCleanMode(vacuumDevice, true) : vacuumDevice.power_mode()
+        const cleanMode = combo
+          ? rv3020MatterCleanMode(vacuumDevice, true)
+          : vacuumDevice.power_mode()
         if (combo || isKnownCleanMode(cleanMode)) {
           await matterApi.updateAccessoryState(uuid, 'rvcCleanMode', combo
             ? { supportedModes: RV3020_CLEAN_MODES, currentMode: cleanMode }
@@ -678,7 +712,9 @@ export class SharkIQMatterPlatform extends SharkIQPlatform {
         }
 
         if (fault) {
-          this.log.warn(`${vacuumDevice._name}: ${fault.message}${fault.extendedCode ? ` (extended code ${fault.extendedCode})` : ''}`)
+          this.log.warn(`${vacuumDevice._name}: ${fault.message}${fault.extendedCode
+            ? ` (extended code ${fault.extendedCode})`
+            : ''}`)
         }
 
         const comboDetails = combo
