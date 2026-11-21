@@ -7,7 +7,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { parseMard, SkegoxApi } from './skegox_api.js'
 
-const log = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() } as any
+const log = {
+  debug: vi.fn(),
+  info: vi.fn(),
+  warn: vi.fn(),
+  error: vi.fn(),
+} as any
 
 function fakeJwt(sub: string): string {
   const payload = Buffer.from(JSON.stringify({ sub })).toString('base64url')
@@ -28,43 +33,80 @@ function writeAuth0File(dir: string, msUntilExpiry = 3600 * 1000): string {
 function stubFetch(overrides: { failFirstPatch?: boolean, mard?: unknown } = {}): ReturnType<typeof vi.fn> {
   let patchCount = 0
   const mock = vi.fn(async (url: string, options: any = {}) => {
-    const ok = (data: unknown) => ({ ok: true, status: 200, json: async () => data, text: async () => '' })
+    const ok = (data: unknown) => ({
+      ok: true,
+      status: 200,
+      json: async () => data,
+      text: async () => '',
+    })
     if (url.includes('/oauth/token')) {
-      return ok({ id_token: fakeJwt('auth0|user123'), refresh_token: 'refresh-2', expires_in: 3600 })
+      return ok({
+        id_token: fakeJwt('auth0|user123'),
+        refresh_token: 'refresh-2',
+        expires_in: 3600,
+      })
     }
     if (url.includes('/householdsEndUser')) {
-      return ok({ households: ['HH1'] })
+      return ok({
+        households: ['HH1'],
+      })
     }
     if (url.includes('/users/user123')) {
-      return ok({ items: [{ deviceId: 'SND1' }] })
+      return ok({
+        items: [
+          { deviceId: 'SND1' },
+        ],
+      })
     }
     if (url.includes('/property-files')) {
       return ok(overrides.mard === undefined
         ? { count: 0, files: [] }
         : {
             count: 1,
-            files: [{ presignedUrl: 'https://object-store.test/mard' }],
+            files: [
+              { presignedUrl: 'https://object-store.test/mard' },
+            ],
           })
     }
     if (url === 'https://object-store.test/mard') {
-      return { ...ok({}), text: async () => JSON.stringify(overrides.mard) }
+      return {
+        ...ok({}),
+        text: async () => JSON.stringify(overrides.mard),
+      }
     }
     if (url.includes('/devices/SND1') && options.method === 'GET') {
       return ok({
         registry: { Battery_Serial_Num: 'DSN123-SND1' },
         telemetry: { Battery_Capacity: 88 },
-        shadow: { properties: { reported: { Operating_Mode: { value: 2 }, DockedStatus: 0 } } },
+        shadow: {
+          properties: {
+            reported: {
+              Operating_Mode: { value: 2 },
+              DockedStatus: 0,
+            },
+          },
+        },
         connectivityStatus: { connected: true },
       })
     }
     if (options.method === 'PATCH') {
       patchCount += 1
       if (overrides.failFirstPatch && patchCount === 1) {
-        return { ok: false, status: 401, json: async () => ({}), text: async () => 'expired' }
+        return {
+          ok: false,
+          status: 401,
+          json: async () => ({}),
+          text: async () => 'expired',
+        }
       }
       return ok({})
     }
-    return { ok: false, status: 404, json: async () => ({}), text: async () => 'not found' }
+    return {
+      ok: false,
+      status: 404,
+      json: async () => ({}),
+      text: async () => 'not found',
+    }
   })
   vi.stubGlobal('fetch', mock)
   return mock
@@ -92,19 +134,26 @@ describe('skegoxApi', () => {
   })
 
   it('reads authoritative display names and robot ids from the MARD map file', async () => {
-    stubFetch({ mard: {
-      floor_id: 'FLOOR1',
-      areas: [
-        {
-          area_meta_data: 'UserRoom:1',
-          robot_room_name: 'AZ_8',
-          user_room_name: 'Kitchen',
-          points: [{ x: 0, y: 0 }, { x: 4, y: 0 }, { x: 4, y: 3 }, { x: 0, y: 3 }],
-        },
-        { area_meta_data: 'UserRoom:2', robot_room_name: 'AZ_10', user_room_name: 'Living Room' },
-        { area_meta_data: 'CarpetZone:3', robot_room_name: 'CZ_3', user_room_name: 'Rug' },
-      ],
-    } })
+    stubFetch({
+      mard: {
+        floor_id: 'FLOOR1',
+        areas: [
+          {
+            area_meta_data: 'UserRoom:1',
+            robot_room_name: 'AZ_8',
+            user_room_name: 'Kitchen',
+            points: [
+              { x: 0, y: 0 },
+              { x: 4, y: 0 },
+              { x: 4, y: 3 },
+              { x: 0, y: 3 },
+            ],
+          },
+          { area_meta_data: 'UserRoom:2', robot_room_name: 'AZ_10', user_room_name: 'Living Room' },
+          { area_meta_data: 'CarpetZone:3', robot_room_name: 'CZ_3', user_room_name: 'Rug' },
+        ],
+      },
+    })
     const api = new SkegoxApi(log, writeAuth0File(dir))
     await api.init()
 
@@ -112,13 +161,24 @@ describe('skegoxApi', () => {
       floorId: 'FLOOR1',
       rooms: ['Kitchen', 'Living Room'],
       nameMap: { AZ_8: 'Kitchen', AZ_10: 'Living Room' },
-      polygons: { AZ_8: [{ x: 0, y: 0 }, { x: 4, y: 0 }, { x: 4, y: 3 }, { x: 0, y: 3 }] },
+      polygons: {
+        AZ_8: [
+          { x: 0, y: 0 },
+          { x: 4, y: 0 },
+          { x: 4, y: 3 },
+          { x: 0, y: 3 },
+        ],
+      },
     })
   })
 
   it('ignores malformed and non-room MARD data', () => {
     expect(parseMard('not json')).toBeUndefined()
-    expect(parseMard({ areas: [{ area_meta_data: 'CarpetZone:1', robot_room_name: 'CZ_1' }] })).toBeUndefined()
+    expect(parseMard({
+      areas: [
+        { area_meta_data: 'CarpetZone:1', robot_room_name: 'CZ_1' },
+      ],
+    })).toBeUndefined()
   })
 
   it('names a vacuum the registry has no name for, rather than calling it "unnamed"', async () => {
@@ -126,12 +186,23 @@ describe('skegoxApi', () => {
     // Model_Number. Since these vacuums are now what the accessory is built
     // from, "unnamed" would have become its name in HomeKit for good.
     vi.stubGlobal('fetch', vi.fn(async (url: string) => {
-      const ok = (data: unknown) => ({ ok: true, status: 200, json: async () => data, text: async () => '' })
+      const ok = (data: unknown) => ({
+        ok: true,
+        status: 200,
+        json: async () => data,
+        text: async () => '',
+      })
       if (url.includes('/householdsEndUser')) {
-        return ok({ households: ['HH1'] })
+        return ok({
+          households: ['HH1'],
+        })
       }
       if (url.includes('/users/user123')) {
-        return ok({ items: [{ deviceId: 'SND00000ABCD' }] })
+        return ok({
+          items: [
+            { deviceId: 'SND00000ABCD' },
+          ],
+        })
       }
       if (url.includes('/devices/SND00000ABCD')) {
         return ok({
@@ -139,7 +210,12 @@ describe('skegoxApi', () => {
           connectivityStatus: { connected: true },
         })
       }
-      return { ok: false, status: 404, json: async () => ({}), text: async () => 'not found' }
+      return {
+        ok: false,
+        status: 404,
+        json: async () => ({}),
+        text: async () => 'not found',
+      }
     }))
 
     const api = new SkegoxApi(log, writeAuth0File(dir))
@@ -160,7 +236,11 @@ describe('skegoxApi', () => {
     expect(patch).toBeDefined()
     expect(patch![0]).toContain('/devicesEndUserController/HH1/devices/SND1')
     expect(JSON.parse(patch![1].body)).toEqual({
-      shadow: { properties: { desired: { Operating_Mode: 2 } } },
+      shadow: {
+        properties: {
+          desired: { Operating_Mode: 2 },
+        },
+      },
     })
   })
 

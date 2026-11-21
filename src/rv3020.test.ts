@@ -14,12 +14,21 @@ function robot(model = 'RV3020XEUS') {
     _dsn: 'TEST',
     _name: 'Test robot',
     values,
-    log: { info: vi.fn(), debug: vi.fn(), warn: vi.fn() },
+    log: {
+      info: vi.fn(),
+      debug: vi.fn(),
+      warn: vi.fn(),
+    },
     get_property_value: (key: string) => values[key],
     operating_mode: () => values.Operating_Mode,
     is_paused: () => values.Operating_Mode === 0,
     get_room_list: () => ['Kitchen'],
-    get_room_clean_target: (rooms: string[]) => ({ identifier: 'FLOOR1', rooms: rooms.map(room => room === 'Kitchen' ? 'AZ_8' : room) }),
+    get_room_clean_target: (rooms: string[]) => ({
+      identifier: 'FLOOR1',
+      rooms: rooms.map(room => room === 'Kitchen'
+        ? 'AZ_8'
+        : room),
+    }),
     skegox: {
       available: () => true,
       setProperty: vi.fn().mockResolvedValue(undefined),
@@ -27,7 +36,14 @@ function robot(model = 'RV3020XEUS') {
         floorId: 'FLOOR1',
         rooms: ['Kitchen'],
         nameMap: { AZ_8: 'Kitchen' },
-        polygons: { AZ_8: [{ x: -1, y: 1 }, { x: 3, y: 1 }, { x: 3, y: 3 }, { x: -1, y: 3 }] },
+        polygons: {
+          AZ_8: [
+            { x: -1, y: 1 },
+            { x: 3, y: 1 },
+            { x: 3, y: 3 },
+            { x: -1, y: 3 },
+          ],
+        },
       }),
     },
     set_property_value: vi.fn().mockResolvedValue(undefined),
@@ -47,7 +63,11 @@ function robot(model = 'RV3020XEUS') {
 function platform() {
   const p = Object.create(SharkIQMatterPlatform.prototype)
   Object.assign(p, {
-    log: { info: vi.fn(), debug: vi.fn(), warn: vi.fn() },
+    log: {
+      info: vi.fn(),
+      debug: vi.fn(),
+      warn: vi.fn(),
+    },
     config: {},
     matterRefreshers: new Map(),
     matterPollTimers: new Map(),
@@ -138,7 +158,9 @@ describe('rV3020 Matter integration', () => {
     await expect(h.rvcCleanMode.changeToMode({ newMode: 6 })).rejects.toThrow('Dock')
     vacuum.values.Operating_Mode = 3
     selectRV3020Mode(vacuum, 6)
-    await h.serviceArea.selectAreas({ newAreas: [1] })
+    await h.serviceArea.selectAreas({
+      newAreas: [1],
+    })
     await h.rvcRunMode.changeToMode({ newMode: 1 })
     expect(vacuum.skegox.setProperty).toHaveBeenNthCalledWith(1, 'TEST', 'AreasToClean_V3', '{"areas_to_clean":{"UserRoom":["AZ_8"]},"clean_count":1,"floor_id":"FLOOR1","cleantype":"dry"}')
     expect(vacuum.skegox.setProperty).toHaveBeenNthCalledWith(2, 'TEST', 'Operating_Mode', 6)
@@ -205,13 +227,19 @@ describe('rV3020 Matter integration', () => {
 
   it('surfaces explicit base tank conditions and unknown dock codes', () => {
     const vacuum = robot()
-    vacuum.values.DockSensorData = JSON.stringify({ GreyTank: { Full: 1 }, CleanTank: { Empty: 0 } })
+    vacuum.values.DockSensorData = JSON.stringify({
+      GreyTank: { Full: 1 },
+      CleanTank: { Empty: 0 },
+    })
     expect(rv3020MaintenanceError(vacuum, false)).toEqual({
       errorStateId: RvcOperationalState.ErrorState.DirtyWaterTankFull,
       errorStateDetails: 'Dirty water tank is full',
     })
 
-    vacuum.values.DockSensorData = JSON.stringify({ GreyTank: { Full: 0 }, CleanTank: { Empty: 1 } })
+    vacuum.values.DockSensorData = JSON.stringify({
+      GreyTank: { Full: 0 },
+      CleanTank: { Empty: 1 },
+    })
     expect(rv3020MaintenanceError(vacuum, false)).toEqual({
       errorStateId: RvcOperationalState.ErrorState.WaterTankEmpty,
       errorStateDetails: 'Dock clean-water tank is empty',
@@ -316,7 +344,9 @@ describe('rV3020 Matter integration', () => {
       selectedAreas: [1],
       currentArea: 1,
       estimatedEndTime: Math.floor(Date.now() / 1000 + 60),
-      progress: [{ areaId: 1, status: 1 }],
+      progress: [
+        { areaId: 1, status: 1 },
+      ],
     })
     vi.clearAllTimers()
   })
@@ -336,7 +366,9 @@ describe('rV3020 Matter integration', () => {
       selectedAreas: [],
       currentArea: 1,
       estimatedEndTime: null,
-      progress: [{ areaId: 1, status: 1 }],
+      progress: [
+        { areaId: 1, status: 1 },
+      ],
     })
     vi.clearAllTimers()
   })
@@ -345,9 +377,20 @@ describe('rV3020 Matter integration', () => {
     const p = platform()
     const vacuum = robot()
     p.vacuumDevices = [vacuum]
-    p.api = { hap: { uuid: { generate: () => 'cached' } } }
+    p.api = {
+      hap: {
+        uuid: {
+          generate: () => 'cached',
+        },
+      },
+    }
     p._startVacuumPolling = vi.fn()
-    const cached: any = { UUID: 'cached', clusters: { rvcCleanMode: { currentMode: 0 } } }
+    const cached: any = {
+      UUID: 'cached',
+      clusters: {
+        rvcCleanMode: { currentMode: 0 },
+      },
+    }
     p.matterAccessories.set('cached', cached)
     const registerPlatformAccessories = vi.fn()
     p._registerMatterDevices({ registerPlatformAccessories })
@@ -364,17 +407,26 @@ describe('rV3020 Matter integration', () => {
 
 describe('rV3020 API metadata and logging', () => {
   it('extracts the model and desired method without exposing the device response in logs', async () => {
-    const log = { debug: vi.fn() } as any
+    const log = {
+      debug: vi.fn(),
+    } as any
     const api = new SkegoxApi(log, 'unused') as any
     api.household_id = 'TEST'
     api.dsn_to_device_id.set('TEST', 'TEST')
     const response = {
       registry: { Device_Model_Number: 'RV3020XEUS', ipAddress: 'PRIVATE_NETWORK' },
       secret: 'PRIVATE_COMMISSIONING',
-      shadow: { properties: {
-        desired: { Operating_Mode: { value: 8 } },
-        reported: { Operating_Mode: { value: 7 }, auth_key: { value: 'PRIVATE_AUTH' } },
-      } },
+      shadow: {
+        properties: {
+          desired: {
+            Operating_Mode: { value: 8 },
+          },
+          reported: {
+            Operating_Mode: { value: 7 },
+            auth_key: { value: 'PRIVATE_AUTH' },
+          },
+        },
+      },
     }
     api.request = vi.fn().mockResolvedValue(response)
     expect(await api.getPropertyValues('test')).toMatchObject({ Device_Model_Number: 'RV3020XEUS', _RV3020DesiredOperatingMode: 8, Operating_Mode: 7 })
@@ -383,7 +435,12 @@ describe('rV3020 API metadata and logging', () => {
     const logs = JSON.stringify(log.debug.mock.calls)
     expect(logs).toContain('RV3020XEUS')
     expect(logs).not.toContain('PRIVATE_')
-    expect(selectCleaningDiagnostics({ auth_key: 'secret', Power_Mode: { value: 0, updatedAt: 'timestamp', extra: 'secret' } }))
-      .toEqual({ Power_Mode: { value: 0, updatedAt: 'timestamp' } })
+    expect(selectCleaningDiagnostics({
+      auth_key: 'secret',
+      Power_Mode: { value: 0, updatedAt: 'timestamp', extra: 'secret' },
+    }))
+      .toEqual({
+        Power_Mode: { value: 0, updatedAt: 'timestamp' },
+      })
   })
 })

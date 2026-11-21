@@ -2,17 +2,27 @@
 
 All notable changes to this project will be documented in this file. This project uses [Semantic Versioning](https://semver.org/)
 
+## v1.6.7-mj261.1 (2026-11-20)
+
+### Changed
+
+- Merge upstream v1.6.7 while retaining RV3020 Matter support.
+
+## v1.6.7 (2026-11-14)
+
+### Changed
+
+- ci: update github actions to their latest versions (#100)
+- chore(deps): dependency updates
+- docs: correct the homebridge version, cloud services, matter and features in the readme
+- chore: leave CLAUDE.md out of the published package
+- ci: publish releases with node.js v26, the current lts
+
 ## v1.6.6-mj261.1 (2026-10-19)
 
 ### Changed
 
 - Merge upstream 1.6.6 and latest CI updates while retaining RV3020 Matter support.
-
-## v1.6.7 (Pending Release)
-
-### Changed
-
-- ci: update github actions to their latest versions
 
 ## v1.6.6 (2026-10-18)
 

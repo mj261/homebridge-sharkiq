@@ -30,7 +30,9 @@ function parseRecord(raw: unknown): JsonRecord | undefined {
   }
   try {
     const parsed = JSON.parse(raw)
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : undefined
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? parsed
+      : undefined
   } catch {
     return undefined
   }
@@ -42,7 +44,9 @@ function readNumber(raw: unknown): number | undefined {
   }
   if (typeof raw === 'string' && raw.trim() !== '') {
     const value = Number(raw)
-    return Number.isFinite(value) ? value : undefined
+    return Number.isFinite(value)
+      ? value
+      : undefined
   }
   return undefined
 }
@@ -168,8 +172,12 @@ function pointInPolygon(point: { x: number, y: number }, polygon: Array<{ x: num
 /** Match Shark's live zone id to the 1-based Matter area id in Home's room list. */
 export function rv3020LiveProgress(vacuum: SharkIqVacuum): RV3020LiveProgress {
   const live = parseRecord(vacuum.get_property_value(Properties.LIVE_PROGRESS))
-  const floor = typeof live?.floor === 'string' ? live.floor : undefined
-  let zone = typeof live?.zone === 'string' ? live.zone.trim() : ''
+  const floor = typeof live?.floor === 'string'
+    ? live.floor
+    : undefined
+  let zone = typeof live?.zone === 'string'
+    ? live.zone.trim()
+    : ''
   const locationRaw = vacuum.get_property_value(Properties.LIVE_LOCATION)
   const location = parseRecord(locationRaw)
 
@@ -190,7 +198,9 @@ export function rv3020LiveProgress(vacuum: SharkIqVacuum): RV3020LiveProgress {
   if (zone && (!floor || !roomMap?.floorId || floor === roomMap.floorId)) {
     const displayName = roomMap?.nameMap[zone] ?? zone
     const index = rooms.findIndex(room => room === displayName || room === zone)
-    areaId = index < 0 ? null : index + 1
+    areaId = index < 0
+      ? null
+      : index + 1
   }
 
   // RV3020XEUS leaves both live zone fields blank during whole-house runs, but
@@ -206,21 +216,49 @@ export function rv3020LiveProgress(vacuum: SharkIqVacuum): RV3020LiveProgress {
       if (currentZone) {
         const displayName = roomMap.nameMap[currentZone] ?? currentZone
         const index = rooms.findIndex(room => room === displayName || room === currentZone)
-        areaId = index < 0 ? null : index + 1
+        areaId = index < 0
+          ? null
+          : index + 1
       }
     }
   }
 
   const rawPercent = readNumber(live?.percent)
-  const percent = rawPercent === undefined ? undefined : Math.max(0, Math.min(100, rawPercent))
-  return { areaId, ...(percent === undefined ? {} : { percent }) }
+  const percent = rawPercent === undefined
+    ? undefined
+    : Math.max(0, Math.min(100, rawPercent))
+  return {
+    areaId,
+    ...(percent === undefined
+      ? {}
+      : { percent }),
+  }
 }
 
 /** Whole-house commands observed from SharkClean on RV3020XEUS hardware. */
 const RV3020_CLEAN_METHODS = [
-  { label: 'Vacuum', operatingMode: 6, modeTags: [{ value: 16385 }] },
-  { label: 'Mop', operatingMode: 7, modeTags: [{ value: 16386 }] },
-  { label: 'Vacuum + Mop', operatingMode: 8, modeTags: [{ value: 16385 }, { value: 16386 }] },
+  {
+    label: 'Vacuum',
+    operatingMode: 6,
+    modeTags: [
+      { value: 16385 },
+    ],
+  },
+  {
+    label: 'Mop',
+    operatingMode: 7,
+    modeTags: [
+      { value: 16386 },
+    ],
+  },
+  {
+    label: 'Vacuum + Mop',
+    operatingMode: 8,
+    modeTags: [
+      { value: 16385 },
+      { value: 16386 },
+    ],
+  },
 ] as const
 
 /**
@@ -232,15 +270,33 @@ const RV3020_CLEAN_METHODS = [
  * below so Home can keep both controls.
  */
 const RV3020_POWER_LEVELS = [
-  { label: 'Eco', powerMode: 1, modeOffset: 10, modeTag: 4 },
-  { label: 'Normal', powerMode: 0, modeOffset: 0, modeTag: 0 },
-  { label: 'Max', powerMode: 2, modeOffset: 20, modeTag: 7 },
+  {
+    label: 'Eco',
+    powerMode: 1,
+    modeOffset: 10,
+    modeTag: 4,
+  },
+  {
+    label: 'Normal',
+    powerMode: 0,
+    modeOffset: 0,
+    modeTag: 0,
+  },
+  {
+    label: 'Max',
+    powerMode: 2,
+    modeOffset: 20,
+    modeTag: 7,
+  },
 ] as const
 
 const RV3020_MODE_COMBINATIONS = RV3020_CLEAN_METHODS.flatMap(method => RV3020_POWER_LEVELS.map(power => ({
   label: `${method.label} ${power.label}`,
   mode: method.operatingMode + power.modeOffset,
-  modeTags: [...method.modeTags, { value: power.modeTag }],
+  modeTags: [
+    ...method.modeTags,
+    { value: power.modeTag },
+  ],
   operatingMode: method.operatingMode,
   powerMode: power.powerMode,
 })))
@@ -258,7 +314,10 @@ const selections = new WeakMap<SharkIqVacuum, Selection>()
 
 /** These command values are specific to this model, not all mop-capable Sharks. */
 export function isRV3020(vacuum: SharkIqVacuum): boolean {
-  return [vacuum._vac_model_number, vacuum.get_property_value('Device_Model_Number')]
+  return [
+    vacuum._vac_model_number,
+    vacuum.get_property_value('Device_Model_Number'),
+  ]
     .some(model => String(model ?? '').trim().toUpperCase() === 'RV3020XEUS')
 }
 
@@ -269,25 +328,39 @@ export function isRV3020Mode(mode: number): boolean {
 /** Decode the single Matter mode id into Shark's two independent settings. */
 export function rv3020ModeSelection(mode: number): { operatingMode: number, powerMode: number } | undefined {
   const selection = RV3020_MODE_COMBINATIONS.find(entry => entry.mode === mode)
-  return selection ? { operatingMode: selection.operatingMode, powerMode: selection.powerMode } : undefined
+  return selection
+    ? { operatingMode: selection.operatingMode, powerMode: selection.powerMode }
+    : undefined
 }
 
 function currentPowerMode(vacuum: SharkIqVacuum): number {
   const powerMode = Number(vacuum.power_mode())
-  return RV3020_POWER_LEVELS.some(entry => entry.powerMode === powerMode) ? powerMode : 0
+  return RV3020_POWER_LEVELS.some(entry => entry.powerMode === powerMode)
+    ? powerMode
+    : 0
 }
 
 /** Preserve Home's selection while idle; reflect native app jobs while running. */
 export function rv3020CleanMode(vacuum: SharkIqVacuum, observe = false): number {
-  let selection = selections.get(vacuum) ?? { mode: 6, powerMode: currentPowerMode(vacuum), pendingUntil: 0 }
+  let selection = selections.get(vacuum) ?? {
+    mode: 6,
+    powerMode: currentPowerMode(vacuum),
+    pendingUntil: 0,
+  }
   if (observe && Date.now() >= selection.pendingUntil) {
     const reported = vacuum.operating_mode()
     if (isRV3020Mode(reported)) {
       const desired = vacuum.get_property_value('_RV3020DesiredOperatingMode')
       // A combined job may report 7 during its wet stage; retain job type 8.
-      selection.mode = desired === 8 ? 8 : reported
+      selection.mode = desired === 8
+        ? 8
+        : reported
     }
-    selection = { ...selection, powerMode: currentPowerMode(vacuum), pendingUntil: 0 }
+    selection = {
+      ...selection,
+      powerMode: currentPowerMode(vacuum),
+      pendingUntil: 0,
+    }
   }
   selections.set(vacuum, selection)
   return selection.mode
@@ -328,7 +401,9 @@ export function rv3020MatterState(vacuum: SharkIqVacuum, invertDockedStatus = fa
   const desiredMode = Number(vacuum.get_property_value('_RV3020DesiredOperatingMode'))
   const charging = vacuum.battery().charging === true
   const rawDocked = Number(vacuum.docked_status())
-  const docked = invertDockedStatus ? rawDocked !== 1 : rawDocked === 1
+  const docked = invertDockedStatus
+    ? rawDocked !== 1
+    : rawDocked === 1
 
   // Active and return states take precedence over DockedStatus because that
   // property lags behind the robot_status transition on this model.
@@ -346,7 +421,10 @@ export function rv3020MatterState(vacuum: SharkIqVacuum, invertDockedStatus = fa
     return { runMode: 0, operationalState: dockOperation }
   }
   if (robotStatus === 13) {
-    return { runMode: 0, operationalState: charging ? 65 : 66 }
+    return {
+      runMode: 0,
+      operationalState: charging ? 65 : 66,
+    }
   }
   if (charging) {
     return { runMode: 0, operationalState: 65 }
@@ -378,7 +456,9 @@ export async function startRV3020(vacuum: SharkIqVacuum, rooms: string[]): Promi
     const payload = encodeRoomListV3(target.rooms, target.identifier, {
       mode: 'UserRoom',
       cleanCount: 1,
-      cleanType: mode === 6 ? 'dry' : 'wet',
+      cleanType: mode === 6
+        ? 'dry'
+        : 'wet',
     })
     vacuum.log.info(`RV3020: starting ${label} in ${rooms.join(', ')}.`)
     await vacuum.skegox.setProperty(vacuum._dsn, 'AreasToClean_V3', payload)
