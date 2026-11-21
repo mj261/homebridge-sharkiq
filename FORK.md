@@ -111,24 +111,45 @@ the upstream repository.
 ## Incorporating upstream updates
 
 The fork's `latest` branch includes the custom commits. The original repository
-is the `upstream` remote. Start from a clean, current checkout of this fork:
+is the `upstream` remote. The updater discovers GitHub's newest stable upstream
+release, merges it into a review branch, chooses the next `-mj261.N` version,
+verifies the RV3020 implementation is still present, and runs lint, build, tests,
+and a package dry run:
 
 ```bash
-git switch latest
-git pull --ff-only origin latest
 bash scripts/merge-upstream.sh
 ```
 
-The script fetches upstream, creates a review branch from the current checkout,
-merges upstream/latest, and runs checks. It stops on conflicts; resolve them
-while preserving the RV3020 tests and fork workflow. It does not push, publish,
-deploy, reset branches, or discard changes. An optional first argument selects
-a fetched release tag or commit instead of upstream/latest.
+The safe default does not change GitHub. It leaves a fully validated local review
+branch and prints the review and push commands. Untracked diagnostic output is
+left alone, while tracked or staged edits stop the script. Preview the detected
+release and version without creating a branch with:
 
-Review the result, update the fork version in both manifests, and open a pull
-request **into mj261/homebridge-sharkiq:latest**. After merging and successful
-checks, create a versioned GitHub release and install its package. Avoid forced
-fork synchronization, which can discard the custom commits.
+```bash
+npm run update:upstream -- --dry-run
+```
+
+External operations require an explicit mode:
+
+```bash
+# Push the review branch and print its GitHub comparison URL.
+npm run update:upstream -- --push
+
+# Push and open a PR (requires an authenticated GitHub CLI).
+npm run update:upstream -- --pr
+
+# Open the PR, wait for checks, merge, publish the release, and wait for assets.
+npm run update:upstream -- --publish
+```
+
+`--publish` asks for a typed confirmation before merging. Add `--yes` only for
+an intentionally unattended run. Any merge conflict, missing RV3020 invariant,
+failed test, failed GitHub check, or missing release asset stops the workflow.
+Use `--target vX.Y.Z` to select a particular stable upstream release.
+
+The PR always targets **mj261/homebridge-sharkiq:latest**. Avoid GitHub's forced
+fork synchronization, rebasing `latest` onto upstream, or resolving whole files
+with “theirs”; each can discard the custom commits even when the result builds.
 
 ## Validation
 
