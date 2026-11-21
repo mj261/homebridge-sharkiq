@@ -46,7 +46,8 @@
     "test-coverage": "npm run test -- --coverage",
     "docs": "typedoc",
     "docs:lint": "typedoc --emit none --treatWarningsAsErrors",
-    "changelog:sync": "node .github/scripts/sync-changelog.mjs"
+    "changelog:sync": "node .github/scripts/sync-changelog.mjs",
+    "update:upstream": "bash scripts/merge-upstream.sh"
   },
   "publishConfig": {
     "access": "public"
